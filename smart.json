@@ -8,6 +8,6 @@
   "packages": {
     "simple-schema": {},
     "collection2": {},
-    "moment": {}
+    "moment-with-langs": {}
   }
 }
