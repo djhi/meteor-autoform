@@ -1,13 +1,13 @@
-var defaultFormId = "_afGenericID";
-var formPreserve = new FormPreserve("autoforms");
-var formData = {}; //for looking up autoform data by form ID
+defaultFormId = "_afGenericID";
+formPreserve = new FormPreserve("autoforms");
+formData = {}; //for looking up autoform data by form ID
 var templatesById = {}; //keep a reference of autoForm templates by form `id` for AutoForm.getFormValues
 var arrayFields = {}; //track # of array fields per form
 var formValues = {}; //for reactive show/hide based on current value of a field
 var fd = new FormData();
-var arrayTracker = new ArrayTracker();
+arrayTracker = new ArrayTracker();
 
-AutoForm = {}; //exported
+AutoForm = AutoForm || {}; //exported
 
 /**
  * @method AutoForm.addHooks
@@ -38,7 +38,9 @@ AutoForm.addHooks = function autoFormAddHooks(formIds, hooks, replace) {
         docToForm: [],
         onSubmit: [],
         onSuccess: [],
-        onError: []
+        onError: [],
+        beginSubmit: [],
+        endSubmit: []
       };
 
       Hooks.addHooksToList(Hooks.form[formId], hooks, replace);
@@ -615,23 +617,14 @@ Template.afArrayField.innerContext = function (options) {
   var ss = c.af.ss;
   var formId = c.af.formId;
 
+  // Init the array tracking for this field
   var docCount = fd.getDocCountForField(formId, name);
-
   arrayTracker.initField(formId, name, ss, docCount, fieldMinCount, fieldMaxCount);
-
-  var range = arrayTracker.getMinMax(ss, name, fieldMinCount, fieldMaxCount);
-  var visibleCount = arrayTracker.getVisibleCount(formId, name);
-  var hasMoreThanMinimum = (visibleCount > range.minCount);
-  var hasLessThanMaximum = (visibleCount < range.maxCount);
 
   return {
     name: name,
     label: ss.label(name),
-    autoform: c.afc,
-    hasMoreThanMinimum: hasMoreThanMinimum,
-    hasLessThanMaximum: hasLessThanMaximum,
-    overrideMinCount: fieldMinCount,
-    overrideMaxCount: fieldMaxCount
+    autoform: c.afc
   };
 };
 
@@ -817,6 +810,44 @@ UI.registerHelper('afFieldIsInvalid', function autoFormFieldIsInvalid(options) {
 });
 
 /*
+ * afArrayFieldHasMoreThanMinimum
+ */
+
+UI.registerHelper('afArrayFieldHasMoreThanMinimum', function autoFormArrayFieldHasMoreThanMinimum(options) {
+  var hash = (options || {}).hash || {};
+  var afContext = hash.autoform && hash.autoform._af || this && this._af;
+  var ss = afContext.ss;
+  if (!ss) {
+    throw new Error("afArrayFieldHasMoreThanMinimum helper must be used within an autoForm block");
+  }
+
+  Utility.getDefs(ss, hash.name); //for side effect of throwing errors when name is not in schema
+  
+  var range = arrayTracker.getMinMax(ss, hash.name, hash.minCount, hash.maxCount);
+  var visibleCount = arrayTracker.getVisibleCount(afContext.formId, hash.name);
+  return (visibleCount > range.minCount);
+});
+
+/*
+ * afArrayFieldHasLessThanMaximum
+ */
+
+UI.registerHelper('afArrayFieldHasLessThanMaximum', function autoFormArrayFieldHasLessThanMaximum(options) {
+  var hash = (options || {}).hash || {};
+  var afContext = hash.autoform && hash.autoform._af || this && this._af;
+  var ss = afContext.ss;
+  if (!ss) {
+    throw new Error("afArrayFieldHasLessThanMaximum helper must be used within an autoForm block");
+  }
+
+  Utility.getDefs(ss, hash.name); //for side effect of throwing errors when name is not in schema
+  
+  var range = arrayTracker.getMinMax(ss, hash.name, hash.minCount, hash.maxCount);
+  var visibleCount = arrayTracker.getVisibleCount(afContext.formId, hash.name);
+  return (visibleCount < range.maxCount);
+});
+
+/*
  * afFieldValueIs
  */
 
@@ -850,471 +881,54 @@ UI.registerHelper('afFieldValueContains', function autoFormFieldValueContains(op
 });
 
 /*
- * Events
- */
-
-function doBefore(docId, doc, hooks, template, name) {
-  // We pass the template instance in case the hook
-  // needs the data context
-  _.each(hooks, function doBeforeHook(hook) {
-    if (hook) {
-      if (docId) {
-        doc = hook(docId, doc, template);
-      } else {
-        doc = hook(doc, template);
-      }
-      if (!_.isObject(doc)) {
-        throw new Error(name + " must return an object");
-      }
-    }
-  });
-  return doc;
-}
-
-function beginSubmit(template) {
-  // TODO eventually allow users to customize beginSubmit behavior
-  if (!template)
-    return;
-  var submitButton = template.find("button[type=submit]") || template.find("input[type=submit]");
-  if (submitButton) {
-    submitButton.disabled = true;
-  }
-}
-
-function endSubmit(template) {
-  // TODO eventually allow users to customize endSubmit behavior
-  if (!template)
-    return;
-  var submitButton = template.find("button[type=submit]") || template.find("input[type=submit]");
-  if (submitButton) {
-    submitButton.disabled = false;
-  }
-}
-
-Template.autoForm.events({
-  'submit form': function autoFormSubmitHandler(event, template) {
-    beginSubmit(template);
-
-    //determine what we want to do
-    var context = this;
-    var isInsert = (context.type === "insert");
-    var isUpdate = (context.type === "update");
-    var isRemove = (context.type === "remove");
-    var isMethod = (context.type === "method");
-    var isNormalSubmit = (!isInsert && !isUpdate && !isRemove && !isMethod);
-    var method = context.meteormethod;
-
-    //init
-    var validationType = context.validation || "submitThenKeyup";
-    var formId = context.id || defaultFormId;
-    var collection = Utility.lookup(context.collection);
-    var ss = Utility.getSimpleSchemaFromContext(context, formId);
-    var currentDoc = context.doc || null;
-    var docId = currentDoc ? currentDoc._id : null;
-    var resetOnSuccess = context.resetOnSuccess;
-
-    // Gather hooks
-    var beforeInsert = Hooks.getHooks(formId, 'before', 'insert');
-    var beforeUpdate = Hooks.getHooks(formId, 'before', 'update');
-    var beforeRemove = Hooks.getHooks(formId, 'before', 'remove');
-    var beforeMethod = method && Hooks.getHooks(formId, 'before', method);
-    var afterInsert = Hooks.getHooks(formId, 'after', 'insert');
-    var afterUpdate = Hooks.getHooks(formId, 'after', 'update');
-    var afterRemove = Hooks.getHooks(formId, 'after', 'remove');
-    var afterMethod = method && Hooks.getHooks(formId, 'after', method);
-    var onSuccess = Hooks.getHooks(formId, 'onSuccess');
-    var onError = Hooks.getHooks(formId, 'onError');
-    var onSubmit = Hooks.getHooks(formId, 'onSubmit');
-
-    // Prevent browser form submission if we're planning to do our own thing
-    if (!isNormalSubmit) {
-      event.preventDefault();
-    }
-
-    // Prep haltSubmission function
-    function haltSubmission() {
-      event.preventDefault();
-      event.stopPropagation();
-      endSubmit(template);
-    }
-
-    // Prep function to select the focus the first field with an error
-    function selectFirstInvalidField() {
-      var ctx = ss.namedContext(formId);
-      if (!ctx.isValid()) {
-        _.every(template.findAll('[data-schema-key]'), function selectFirstInvalidFieldEvery(input) {
-          if (ctx.keyIsInvalid(input.getAttribute('data-schema-key'))) {
-            input.focus();
-            return false;
-          } else {
-            return true;
-          }
-        });
-      }
-    }
-
-    // Prep reset form function
-    function autoFormDoResetForm() {
-      if (!template._notInDOM) {
-        template.find("form").reset();
-        var focusInput = template.find("[autofocus]");
-        focusInput && focusInput.focus();
-      }
-    }
-
-    // Prep callback creator function
-    function makeCallback(name, afterHook) {
-      return function autoFormActionCallback(error, result) {
-        if (error) {
-          selectFirstInvalidField();
-          _.each(onError, function onErrorEach(hook) {
-            hook(name, error, template);
-          });
-        } else {
-          // By default, we reset form after successful submit, but
-          // you can opt out.
-          if (resetOnSuccess !== false) {
-            autoFormDoResetForm();
-          }
-          _.each(onSuccess, function onSuccessEach(hook) {
-            hook(name, result, template);
-          });
-        }
-        _.each(afterHook, function afterHookEach(hook) {
-          hook(error, result, template);
-        });
-        endSubmit(template);
-      };
-    }
-
-    // If type is "remove", do that right away since we don't need to gather
-    // form values or validate.
-    if (isRemove) {
-      // Call beforeRemove hooks if present, and stop if any return false
-      var shouldStop = _.any(beforeRemove, function eachBeforeRemove(hook) {
-        return (hook(docId, template) === false);
-      });
-      if (shouldStop) {
-        return haltSubmission();
-      }
-      if(!collection) {
-          throw new Error("AutoForm: You must specify a collection when form type is remove.");
-      }
-      collection.remove(docId, makeCallback('remove', afterRemove));
-      return;
-    }
-
-    // Gather all form values
-    var form = getFormValues(template, formId, ss);
-
-    // Execute some before hooks
-    var insertDoc = isInsert ? doBefore(null, form.insertDoc, beforeInsert, template, 'before.insert hook') : form.insertDoc;
-    var updateDoc = isUpdate && !_.isEmpty(form.updateDoc) ? doBefore(docId, form.updateDoc, beforeUpdate, template, 'before.update hook') : form.updateDoc;
-
-    // Get a version of the doc that has auto values to validate here. We
-    // don't want to actually send any auto values to the server because
-    // we ultimately want them generated on the server
-    var insertDocForValidation = ss.clean(_.clone(insertDoc), {
-      filter: false,
-      autoConvert: false,
-      extendAutoValueContext: {
-        userId: (Meteor.userId && Meteor.userId()) || null,
-        isInsert: true,
-        isUpdate: false,
-        isUpsert: false,
-        isFromTrustedCode: false
-      }
-    });
-
-    // Prep isValid function
-    var validationErrorTriggered = 0;
-    function isValid(doc, isModifier, type) {
-      var result = validationType === 'none' || ss.namedContext(formId).validate(doc, {
-        modifier: isModifier,
-        extendedCustomContext: {
-          userId: (Meteor.userId && Meteor.userId()) || null,
-          isInsert: !isModifier,
-          isUpdate: !!isModifier,
-          isUpsert: false,
-          isFromTrustedCode: false
-        }
-      });
-      if (!result && !validationErrorTriggered) {
-        selectFirstInvalidField();
-        _.each(onError, function onErrorEach(hook) {
-          hook(type, new Error('failed validation'), template);
-        });
-        validationErrorTriggered++;
-      }
-      return result;
-    }
-
-    // Perform validation for onSubmit call or for normal form submission
-    if (((onSubmit.length > 0) || isNormalSubmit) && !isValid(insertDocForValidation, false, 'pre-submit validation')) {
-      return haltSubmission();
-    }
-
-    // Call onSubmit
-    if (onSubmit.length > 0) {
-      var context = {
-        event: event,
-        template: template,
-        resetForm: autoFormDoResetForm
-      };
-      // Pass both types of doc to onSubmit
-      var shouldStop = _.any(onSubmit, function eachOnSubmit(hook) {
-        return (hook.call(context, insertDoc, updateDoc, currentDoc) === false);
-      });
-      if (shouldStop) {
-        return haltSubmission();
-      }
-    }
-
-    // Now we will do the requested insert, update, remove, method, or normal
-    // browser form submission. Even though we may have already validated above
-    // if we have an onSubmit hook, we do it again upon insert or update
-    // because collection2 validation catches additional stuff like unique and
-    // because our form schema need not be the same as our collection schema.
-    if (isInsert) {
-      if(!collection) {
-         throw new Error("AutoForm: You must specify a collection when form type is insert.");
-      }
-      collection.insert(insertDoc, {validationContext: formId}, makeCallback('insert', afterInsert));
-    } else if (isUpdate) {
-      var updateCallback = makeCallback('update', afterUpdate);
-      if (_.isEmpty(updateDoc)) {
-        // Nothing to update. Just treat it as a successful update.
-        updateCallback(null, 0);
-      } else {
-        if(!collection) {
-          throw new Error("AutoForm: You must specify a collection when form type is update.");
-        }
-        collection.update(docId, updateDoc, {validationContext: formId}, updateCallback);
-      }
-    }
-
-    // We won't do an else here so that a method could be called in
-    // addition to another action on the same submit
-    if (method) {
-      var methodDoc = doBefore(null, form.insertDoc, beforeMethod, template, 'before.method hook');
-      // Get a copy of the doc with auto values added to use for validation
-      var methodDocForValidation = ss.clean(_.clone(methodDoc), {
-        filter: false,
-        autoConvert: false,
-        extendAutoValueContext: {
-          userId: (Meteor.userId && Meteor.userId()) || null,
-          isInsert: true, //methodDoc should be treated like insertDoc
-          isUpdate: false,
-          isUpsert: false,
-          isFromTrustedCode: false
-        }
-      });
-      // Validate first
-      if (!isValid(methodDocForValidation, false, method)) {
-        return haltSubmission();
-      }
-      Meteor.call(method, methodDoc, form.updateDoc, makeCallback(method, afterMethod));
-    }
-  },
-  'keyup [data-schema-key]': function autoFormKeyUpHandler(event, template) {
-    var validationType = template.data.validation || 'submitThenKeyup';
-    var onlyIfAlreadyInvalid = (validationType === 'submitThenKeyup');
-    var skipEmpty = !(event.keyCode === 8 || event.keyCode === 46); //if deleting or backspacing, don't skip empty
-    if ((validationType === 'keyup' || validationType === 'submitThenKeyup')) {
-      validateField(event.currentTarget.getAttribute("data-schema-key"), template, skipEmpty, onlyIfAlreadyInvalid);
-    }
-  },
-  'blur [data-schema-key]': function autoFormBlurHandler(event, template) {
-    var validationType = template.data.validation || 'submitThenKeyup';
-    var onlyIfAlreadyInvalid = (validationType === 'submitThenKeyup' || validationType === 'submitThenBlur');
-    if (validationType === 'keyup' || validationType === 'blur' || validationType === 'submitThenKeyup' || validationType === 'submitThenBlur') {
-      validateField(event.currentTarget.getAttribute("data-schema-key"), template, false, onlyIfAlreadyInvalid);
-    }
-  },
-  'change form': function autoFormChangeHandler(event, template) {
-    var key = event.target.getAttribute("data-schema-key");
-    if (!key)
-      return;
-
-    var formId = this.id;
-    var data = formData[formId];
-    if (data && data.ss) {
-      var ss = data.ss;
-      formPreserve.registerForm(formId, function autoFormRegFormCallback() {
-        return getFormValues(template, formId, ss).insertDoc;
-      });
-
-      // Get field's value for reactive show/hide of other fields by value
-      updateTrackedFieldValue(formId, key, getFieldValue(template, key));
-    }
-    var validationType = data.validationType || 'submitThenKeyup';
-    var onlyIfAlreadyInvalid = (validationType === 'submitThenKeyup' || validationType === 'submitThenBlur');
-    if (validationType === 'keyup' || validationType === 'blur' || validationType === 'submitThenKeyup' || validationType === 'submitThenBlur') {
-      validateField(key, template, false, onlyIfAlreadyInvalid);
-    }
-  },
-  'reset form': function autoFormResetHandler(event, template) {
-    var context = this;
-    var formId = context.id || defaultFormId;
-    AutoForm.resetForm(formId);
-    if (context.doc) {
-      //reload form values from doc
-      event.preventDefault();
-      template['__component__'].render();
-    }
-  },
-  'keydown .autoform-array-item input': function (event, template) {
-    // When enter is pressed in an array item field, default behavior
-    // seems to be to "click" the remove item button. This doesn't make
-    // sense so we stop it.
-    if (event.keyCode === 13) {
-      event.preventDefault();
-    }
-  },
-  'click .autoform-remove-item': function autoFormClickRemoveItem(event, template) {
-    var self = this;
-
-    event.preventDefault();
-
-    var name = self.arrayFieldName;
-    var index = self.index;
-    var data = template.data;
-    var formId = data && data.id || defaultFormId;
-    data = formData[formId];
-
-    // remove the item we clicked
-    arrayTracker.removeFromFieldAtIndex(formId, name, index, data.ss, self.minCount, self.maxCount)
-  },
-  'click .autoform-add-item': function autoFormClickAddItem(event, template) {
-    var self = this;
-
-    event.preventDefault();
-
-    var name = self.name;
-    var data = template.data;
-    var formId = data && data.id || defaultFormId;
-    data = formData[formId];
-
-    arrayTracker.addOneToField(formId, name, data.ss, self.overrideMinCount, self.overrideMaxCount);
-  }
-});
-
-/*
  * Private Helper Functions
  */
 
 function getFieldsValues(fields) {
   var doc = {};
-  _.each(fields, function formValuesEach(field) {
-    var name = field.getAttribute("data-schema-key");
-    var val = field.value || field.getAttribute('contenteditable') && field.innerHTML; //value is undefined for contenteditable
-    var type = field.getAttribute("type") || "";
-    type = type.toLowerCase();
-    var tagName = field.tagName || "";
-    tagName = tagName.toLowerCase();
+  fields.each(function formValuesEach() {
+    var field = $(this);
+    var fieldName = field.attr("data-schema-key");
 
-    // Handle select
-    if (tagName === "select") {
-      if (val === "true") { //boolean select
-        doc[name] = true;
-      } else if (val === "false") { //boolean select
-        doc[name] = false;
-      } else if (field.hasAttribute("multiple")) {
-        //multiple select, so we want an array value
-        doc[name] = Utility.getSelectValues(field);
-      } else {
-        doc[name] = val;
-      }
-      return;
-    }
-
-    // Handle checkbox
-    if (type === "checkbox") {
-      if (val === "true") { //boolean checkbox
-        doc[name] = field.checked;
-      } else { //array checkbox
-        // Add empty array no matter what,
-        // to ensure that unchecking all boxes
-        // will empty the array.
-        if (!_.isArray(doc[name])) {
-          doc[name] = [];
+    // use custom handlers first, and then use built-in handlers
+    _.every([customInputValueHandlers, defaultInputValueHandlers], function (handlerList) {
+      return _.every(handlerList, function (handler, selector) {
+        if (field.filter(selector).length === 1) {
+          // Special handling for checkboxes that create arrays
+          // XXX maybe there is a way to do this better
+          var isArrayCheckBox = (field.hasClass("autoform-array-item"));
+          if (isArrayCheckBox) {
+            // Add empty array no matter what,
+            // to ensure that unchecking all boxes
+            // will empty the array.
+            if (!_.isArray(doc[fieldName])) {
+              doc[fieldName] = [];
+            }
+          }
+          var val = handler.call(field);
+          if (val !== void 0) {
+            if (isArrayCheckBox) {
+              doc[fieldName].push(val);
+            } else {
+              doc[fieldName] = val;
+            }
+          }
+          return false;
         }
-        // Add the value to the array only
-        // if checkbox is selected.
-        field.checked && doc[name].push(val);
-      }
-      return;
-    }
-
-    // Handle radio
-    if (type === "radio") {
-      if (field.checked) {
-        if (val === "true") { //boolean radio
-          doc[name] = true;
-        } else if (val === "false") { //boolean radio
-          doc[name] = false;
-        } else {
-          doc[name] = val;
-        }
-      }
-      return;
-    }
-
-    // Handle number
-    if (type === "select") {
-      doc[name] = Utility.maybeNum(val);
-      return;
-    }
-
-    // Handle date inputs
-    if (type === "date") {
-      if (Utility.isValidDateString(val)) {
-        //Date constructor will interpret val as UTC and create
-        //date at mignight in the morning of val date in UTC time zone
-        doc[name] = new Date(val);
-      } else {
-        doc[name] = null;
-      }
-      return;
-    }
-
-    // Handle date inputs
-    if (type === "datetime") {
-      val = (typeof val === "string") ? val.replace(/ /g, "T") : val;
-      if (Utility.isValidNormalizedForcedUtcGlobalDateAndTimeString(val)) {
-        //Date constructor will interpret val as UTC due to ending "Z"
-        doc[name] = new Date(val);
-      } else {
-        doc[name] = null;
-      }
-      return;
-    }
-
-    // Handle date inputs
-    if (type === "datetime-local") {
-      val = (typeof val === "string") ? val.replace(/ /g, "T") : val;
-      var offset = field.getAttribute("data-offset") || "Z";
-      if (Utility.isValidNormalizedLocalDateAndTimeString(val)) {
-        doc[name] = new Date(val + offset);
-      } else {
-        doc[name] = null;
-      }
-      return;
-    }
-
-    // Handle all other inputs
-    doc[name] = val;
+        return true;
+      });
+    });
   });
 
   return doc;
 }
 
-function getFieldValue(template, key) {
-  var doc = getFieldsValues(template.$('[data-schema-key="' + key + '"]'));
+getFieldValue = function getFieldValue(template, key) {
+  var doc = getFieldsValues(template.$('[data-schema-key="' + key + '"], [data-schema-key^="' + key + '."]'));
   return doc && doc[key];
-}
+};
 
-function getFormValues(template, formId, ss) {
+getFormValues = function getFormValues(template, formId, ss) {
   var doc = getFieldsValues(template.$("[data-schema-key]").not("[disabled]"));
 
   // Expand the object
@@ -1346,7 +960,7 @@ function getFormValues(template, formId, ss) {
     })
   };
   return result;
-}
+};
 
 function getInputValue(name, value, mDoc, expectsArray, defaultValue) {
   if (typeof value === "undefined") {
@@ -1408,12 +1022,33 @@ function getInputValue(name, value, mDoc, expectsArray, defaultValue) {
 
 function getInputData(defs, hash, value, type, label, expectsArray) {
   var schemaType = defs.type;
+  // We don't want to alter the original hash, so we clone it and
+  // remove some stuff that should not be HTML attributes
+  var inputAtts = _.omit(hash,
+          "name",
+          "autoform",
+          "value",
+          "data-schema-key",
+          "firstOption",
+          "radio",
+          "select",
+          "noselect",
+          "trueLabel",
+          "falseLabel",
+          "options",
+          "offset",
+          "template");
+
+  // Add required to every type of element, if required
+  if (typeof inputAtts.required === "undefined" && !defs.optional) {
+    inputAtts.required = "";
+  }
 
   var min = (typeof defs.min === "function") ? defs.min() : defs.min;
   var max = (typeof defs.max === "function") ? defs.max() : defs.max;
 
   if (type === "datetime-local") {
-    hash["data-offset"] = hash.offset || "Z";
+    inputAtts["data-offset"] = hash.offset || "Z";
   }
 
   //convert Date value to required string value based on field type
@@ -1423,7 +1058,7 @@ function getInputData(defs, hash, value, type, label, expectsArray) {
     } else if (type === "datetime") {
       value = Utility.dateToNormalizedForcedUtcGlobalDateAndTimeString(value);
     } else if (type === "datetime-local") {
-      value = Utility.dateToNormalizedLocalDateAndTimeString(value, hash["data-offset"]);
+      value = Utility.dateToNormalizedLocalDateAndTimeString(value, inputAtts["data-offset"]);
     }
   }
 
@@ -1450,7 +1085,7 @@ function getInputData(defs, hash, value, type, label, expectsArray) {
 
   // Set placeholder to label from schema if requested
   if (hash.placeholder === "schemaLabel") {
-    hash.placeholder = label;
+    inputAtts.placeholder = label;
   }
 
   // To enable reactively toggling boolean attributes
@@ -1460,7 +1095,7 @@ function getInputData(defs, hash, value, type, label, expectsArray) {
   _.each(["disabled", "readonly", "checked", "required"], function (booleanProp) {
     // For historical reasons, we treat the string "true" and an empty string as `true`, too
     if (_.has(hash, booleanProp) && hash[booleanProp] !== true && hash[booleanProp] !== "true" && hash[booleanProp] !== "") {
-      delete hash[booleanProp];
+      delete inputAtts[booleanProp];
     }
   });
 
@@ -1468,34 +1103,18 @@ function getInputData(defs, hash, value, type, label, expectsArray) {
   var data = {};
 
   // Add name to every type of element
+  // XXX Could probably leave name in inputAtts and simplify all templates
   data.name = hash.name;
 
   data.expectsArray = expectsArray;
 
-  // Clean hash so that we can add anything remaining as attributes
-  hash = _.omit(hash,
-          "name",
-          "autoform",
-          "value",
-          "data-schema-key",
-          "firstOption",
-          "radio",
-          "select",
-          "noselect",
-          "trueLabel",
-          "falseLabel",
-          "options",
-          "offset",
-          "template");
-
-  // Add required to every type of element, if required
-  if (typeof hash.required === "undefined" && !defs.optional) {
-    hash.required = "";
-  }
-
   if (selectOptions) {
     // Build anything that should be a select, which is anything with options
     data.items = [];
+    // For check boxes, we add the "autoform-array-item" class
+    if (noselect && expectsArray) {
+      inputAtts["class"] = (inputAtts["class"] || "") + " autoform-array-item";
+    }
     _.each(selectOptions, function(opt) {
       var selected = expectsArray ? _.contains(value, opt.value.toString()) : (opt.value.toString() === value.toString());
       data.items.push({
@@ -1508,32 +1127,34 @@ function getInputData(defs, hash, value, type, label, expectsArray) {
         _id: opt.value,
         checked: selected ? "checked" : "",
         selected: selected ? "selected" : "",
-        atts: hash
+        atts: inputAtts
       });
     });
     if (!noselect) {
-      hash.autocomplete = "off"; //can fix issues with some browsers selecting the firstOption instead of the selected option
+      inputAtts.autocomplete = "off"; //can fix issues with some browsers selecting the firstOption instead of the selected option
       if (expectsArray) {
-        hash.multiple = "";
+        inputAtts.multiple = "";
       }
       data.firstOption = (firstOption && !expectsArray) ? firstOption : "";
-      data.cls = hash["class"] || "";
-      hash = _.omit(hash, "class");
-      data.atts = hash;
+      // XXX should rework all templates to extend class attr rather than
+      // using separate cls
+      data.cls = inputAtts["class"] || "";
+      inputAtts = _.omit(inputAtts, "class");
+      data.atts = inputAtts;
     }
   } else if (type === "textarea") {
-    if (typeof hash.maxlength === "undefined" && typeof max === "number") {
-      hash.maxlength = max;
+    if (typeof inputAtts.maxlength === "undefined" && typeof max === "number") {
+      inputAtts.maxlength = max;
     }
-    data.cls = hash["class"] || "";
-    hash = _.omit(hash, "class");
-    data.atts = hash;
+    data.cls = inputAtts["class"] || "";
+    inputAtts = _.omit(inputAtts, "class");
+    data.atts = inputAtts;
     data.value = value;
   } else if (type === "contenteditable") {
-    if (typeof hash['data-maxlength'] === "undefined" && typeof max === "number") {
-      hash['data-maxlength'] = max;
+    if (typeof inputAtts['data-maxlength'] === "undefined" && typeof max === "number") {
+      inputAtts['data-maxlength'] = max;
     }
-    data.atts = hash;
+    data.atts = inputAtts;
     data.value = value;
   } else if (type === "boolean") {
     value = (value === "true") ? true : false;
@@ -1553,75 +1174,78 @@ function getInputData(defs, hash, value, type, label, expectsArray) {
         label: trueLabel
       }
     ];
+    // add autoform-boolean class, which we use when building object
+    // from form values later
+    inputAtts["class"] = (inputAtts["class"] || "") + " autoform-boolean";
     if (radio) {
       data.items = items;
-      data.items[0].atts = hash;
-      data.items[1].atts = hash;
+      data.items[0].atts = inputAtts;
+      data.items[1].atts = inputAtts;
     } else if (select) {
       data.items = items;
-      data.cls = hash["class"] || "";
-      hash = _.omit(hash, "class");
-      data.atts = hash;
+      data.cls = inputAtts["class"];
+      inputAtts = _.omit(inputAtts, "class");
+      data.atts = inputAtts;
     } else {
       //don't add required attribute to this one because some browsers assume that to mean that it must be checked, which is not what we mean by "required"
-      delete hash.required;
+      delete inputAtts.required;
       data.label = label;
       data.value = "true";
       data.checked = value ? "checked" : "";
-      data.atts = hash;
+      data.atts = inputAtts;
     }
   } else {
     // All other input types
     switch (type) {
       case "number":
-        if (typeof hash.max === "undefined" && typeof max === "number") {
-          hash.max = max;
+        if (typeof inputAtts.max === "undefined" && typeof max === "number") {
+          inputAtts.max = max;
         }
-        if (typeof hash.min === "undefined" && typeof min === "number") {
-          hash.min = min;
+        if (typeof inputAtts.min === "undefined" && typeof min === "number") {
+          inputAtts.min = min;
         }
-        if (typeof hash.step === "undefined" && defs.decimal) {
-          hash.step = '0.01';
+        if (typeof inputAtts.step === "undefined" && defs.decimal) {
+          inputAtts.step = '0.01';
         }
         break;
       case "date":
-        if (typeof hash.max === "undefined" && max instanceof Date) {
-          hash.max = Utility.dateToDateStringUTC(max);
+        if (typeof inputAtts.max === "undefined" && max instanceof Date) {
+          inputAtts.max = Utility.dateToDateStringUTC(max);
         }
-        if (typeof hash.min === "undefined" && min instanceof Date) {
-          hash.min = Utility.dateToDateStringUTC(min);
+        if (typeof inputAtts.min === "undefined" && min instanceof Date) {
+          inputAtts.min = Utility.dateToDateStringUTC(min);
         }
         break;
       case "datetime":
-        if (typeof hash.max === "undefined" && max instanceof Date) {
-          hash.max = Utility.dateToNormalizedForcedUtcGlobalDateAndTimeString(max);
+        if (typeof inputAtts.max === "undefined" && max instanceof Date) {
+          inputAtts.max = Utility.dateToNormalizedForcedUtcGlobalDateAndTimeString(max);
         }
-        if (typeof hash.min === "undefined" && min instanceof Date) {
-          hash.min = Utility.dateToNormalizedForcedUtcGlobalDateAndTimeString(min);
+        if (typeof inputAtts.min === "undefined" && min instanceof Date) {
+          inputAtts.min = Utility.dateToNormalizedForcedUtcGlobalDateAndTimeString(min);
         }
         break;
       case "datetime-local":
-        if (typeof hash.max === "undefined" && max instanceof Date) {
-          hash.max = Utility.dateToNormalizedLocalDateAndTimeString(max, hash["data-offset"]);
+        if (typeof inputAtts.max === "undefined" && max instanceof Date) {
+          inputAtts.max = Utility.dateToNormalizedLocalDateAndTimeString(max, hash["data-offset"]);
         }
-        if (typeof hash.min === "undefined" && min instanceof Date) {
-          hash.min = Utility.dateToNormalizedLocalDateAndTimeString(min, hash["data-offset"]);
+        if (typeof inputAtts.min === "undefined" && min instanceof Date) {
+          inputAtts.min = Utility.dateToNormalizedLocalDateAndTimeString(min, hash["data-offset"]);
         }
         break;
     }
 
-    if (typeof hash.maxlength === "undefined"
+    if (typeof inputAtts.maxlength === "undefined"
             && typeof max === "number"
             && _.contains(["text", "email", "search", "password", "tel", "url"], type)
             ) {
-      hash.maxlength = max;
+      inputAtts.maxlength = max;
     }
 
     data.type = type;
     data.value = value;
-    data.cls = hash["class"] || "";
-    hash = _.omit(hash, "class");
-    data.atts = hash;
+    data.cls = inputAtts["class"] || "";
+    inputAtts = _.omit(inputAtts, "class");
+    data.atts = inputAtts;
   }
 
   return data;
@@ -1771,7 +1395,7 @@ function _validateField(key, template, skipEmpty, onlyIfAlreadyInvalid) {
 
 //throttling function that calls out to _validateField
 var vok = {}, tm = {};
-function validateField(key, template, skipEmpty, onlyIfAlreadyInvalid) {
+validateField = function validateField(key, template, skipEmpty, onlyIfAlreadyInvalid) {
   if (vok[key] === false) {
     Meteor.clearTimeout(tm[key]);
     tm[key] = Meteor.setTimeout(function() {
@@ -1782,14 +1406,14 @@ function validateField(key, template, skipEmpty, onlyIfAlreadyInvalid) {
   }
   vok[key] = false;
   _validateField(key, template, skipEmpty, onlyIfAlreadyInvalid);
-}
+};
 
-function updateTrackedFieldValue(formId, key, val) {
+updateTrackedFieldValue = function updateTrackedFieldValue(formId, key, val) {
   formValues[formId] = formValues[formId] || {};
   formValues[formId][key] = formValues[formId][key] || {_deps: new Deps.Dependency};
   formValues[formId][key]._val = val;
   formValues[formId][key]._deps.changed();
-}
+};
 
 function getTrackedFieldValue(formId, key) {
   formValues[formId] = formValues[formId] || {};

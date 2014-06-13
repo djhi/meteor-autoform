@@ -14,58 +14,58 @@ have to add to your app yourself.
 <!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
 **Table of Contents**  *generated with [DocToc](http://doctoc.herokuapp.com/)*
 
-- [AutoForm [![Build Status](https://travis-ci.org/aldeed/meteor-autoform.svg)](https://travis-ci.org/aldeed/meteor-autoform)](#autoform-!build-statushttpstravis-ciorgaldeedmeteor-autoformsvghttpstravis-ciorgaldeedmeteor-autoform)
-  - [Blaze Transition](#blaze-transition)
-  - [Installation](#installation)
-  - [Example](#example)
-    - [A Basic Insert Form](#a-basic-insert-form)
-    - [A Basic Update Form](#a-basic-update-form)
-    - [A Basic Remove Form](#a-basic-remove-form)
-    - [A Custom Insert Form](#a-custom-insert-form)
-    - [Another Custom Insert Form](#another-custom-insert-form)
-  - [Component and Helper Reference](#component-and-helper-reference)
-    - [autoForm](#autoform)
-    - [quickForm](#quickform)
-    - [afFieldInput](#affieldinput)
-    - [afFieldSelect](#affieldselect)
-    - [afFieldLabel](#affieldlabel)
-    - [afFieldMessage](#affieldmessage)
-    - [afFieldIsInvalid](#affieldisinvalid)
-    - [afQuickField](#afquickfield)
-      - [afQuickField Examples](#afquickfield-examples)
-    - [afFieldValueIs](#affieldvalueis)
-    - [afFieldValueContains](#affieldvaluecontains)
-  - [Objects and Arrays](#objects-and-arrays)
-    - [afObjectField](#afobjectfield)
-    - [afArrayField](#afarrayfield)
-  - [Public API](#public-api)
-  - [Non-Collection Forms](#non-collection-forms)
-    - [An Example Contact Form](#an-example-contact-form)
-  - [Fine Tuning Validation](#fine-tuning-validation)
-  - [Resetting Validation](#resetting-validation)
-  - [The Form Document](#the-form-document)
-    - [Getting Current Field Values](#getting-current-field-values)
-  - [Callbacks/Hooks](#callbackshooks)
-    - [onSubmit](#onsubmit)
-    - [formToDoc and docToForm](#formtodoc-and-doctoform)
-  - [Complex Schemas](#complex-schemas)
-  - [Complex Controls](#complex-controls)
-  - [Using Block Helpers Within an AutoForm](#using-block-helpers-within-an-autoform)
-  - [Dates](#dates)
-    - [type=date](#type=date)
-    - [type=datetime](#type=datetime)
-    - [type=datetime-local](#type=datetime-local)
-  - [Templates](#templates)
-    - [Using a Different Template](#using-a-different-template)
-    - [Creating a Custom Template](#creating-a-custom-template)
-  - [Common Questions](#common-questions)
-    - [Should the value of `schema` and `collection` have quotation marks around it?](#should-the-value-of-schema-and-collection-have-quotation-marks-around-it)
-    - [Which components should I use?](#which-components-should-i-use)
-    - [Can I reuse the same `quickForm` or `autoForm` for both inserts and updates?](#can-i-reuse-the-same-quickform-or-autoform-for-both-inserts-and-updates)
-    - [Can I put HTML in my error messages?](#can-i-put-html-in-my-error-messages)
-  - [Examples](#examples)
-  - [Troubleshooting](#troubleshooting)
-  - [Contributing](#contributing)
+- [Blaze Transition](#blaze-transition)
+- [Installation](#installation)
+- [Example](#example)
+  - [A Basic Insert Form](#a-basic-insert-form)
+  - [A Basic Update Form](#a-basic-update-form)
+  - [A Basic Remove Form](#a-basic-remove-form)
+  - [A Custom Insert Form](#a-custom-insert-form)
+  - [Another Custom Insert Form](#another-custom-insert-form)
+- [Component and Helper Reference](#component-and-helper-reference)
+  - [autoForm](#autoform)
+  - [quickForm](#quickform)
+  - [afFieldInput](#affieldinput)
+  - [afFieldSelect](#affieldselect)
+  - [afFieldLabel](#affieldlabel)
+  - [afFieldMessage](#affieldmessage)
+  - [afFieldIsInvalid](#affieldisinvalid)
+  - [afQuickField](#afquickfield)
+    - [afQuickField Examples](#afquickfield-examples)
+  - [afFieldValueIs](#affieldvalueis)
+  - [afFieldValueContains](#affieldvaluecontains)
+- [Objects and Arrays](#objects-and-arrays)
+  - [afObjectField](#afobjectfield)
+  - [afArrayField](#afarrayfield)
+- [Public API](#public-api)
+- [Non-Collection Forms](#non-collection-forms)
+  - [An Example Contact Form](#an-example-contact-form)
+- [Fine Tuning Validation](#fine-tuning-validation)
+- [Resetting Validation](#resetting-validation)
+- [The Form Document](#the-form-document)
+  - [Getting Current Field Values](#getting-current-field-values)
+- [Callbacks/Hooks](#callbackshooks)
+  - [onSubmit](#onsubmit)
+  - [formToDoc and docToForm](#formtodoc-and-doctoform)
+- [Complex Schemas](#complex-schemas)
+- [Complex Controls](#complex-controls)
+- [Using Block Helpers Within an AutoForm](#using-block-helpers-within-an-autoform)
+- [Dates](#dates)
+  - [type=date](#type=date)
+  - [type=datetime](#type=datetime)
+  - [type=datetime-local](#type=datetime-local)
+- [Templates](#templates)
+  - [Using a Different Template](#using-a-different-template)
+  - [Creating a Custom Template](#creating-a-custom-template)
+- [Making AutoForm-Ready Components](#making-autoform-ready-components)
+- [Common Questions](#common-questions)
+  - [Should the value of `schema` and `collection` have quotation marks around it?](#should-the-value-of-schema-and-collection-have-quotation-marks-around-it)
+  - [Which components should I use?](#which-components-should-i-use)
+  - [Can I reuse the same `quickForm` or `autoForm` for both inserts and updates?](#can-i-reuse-the-same-quickform-or-autoform-for-both-inserts-and-updates)
+  - [Can I put HTML in my error messages?](#can-i-put-html-in-my-error-messages)
+- [Examples](#examples)
+- [Troubleshooting](#troubleshooting)
+- [Contributing](#contributing)
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
 
@@ -192,6 +192,8 @@ content:
 <span style="color: yellow">DELETE ME!!</span>
 {{/afDeleteButton}}
 ```
+
+To show a confirmation dialog before deleting, add an `id` attribute to the `afDeleteButton` and define a "before remove" hook for that form ID.
 
 ### A Custom Insert Form
 
@@ -366,7 +368,8 @@ custom template to use.
 and a `value` property. By specifying options, you cause the generated DOM
 element to be a `select` element with these options, unless you also use
 `noselect`. To use the `allowedValues` from the schema as the options, set
-`options="allowed"`.
+`options="allowed"`. To specify a label to be displayed when there is no
+option selected, set `firstOption="(My Select One Label)"`.
 * `capitalize`: Used only when you've set `options="allowed"`. Set this to `true`
 to capitalize the labels generated from `allowedValues`.
 * `noselect`: Use in conjunction with `options` attribute. Set this attribute
@@ -793,15 +796,23 @@ AutoForm.hooks({
     },
     onSubmit: function(insertDoc, updateDoc, currentDoc) {},
 
-    //called when any operation succeeds, where operation will be
-    //"insert", "update", "remove", or the method name.
+    // Called when any operation succeeds, where operation will be
+    // "insert", "update", "remove", or the method name.
     onSuccess: function(operation, result, template) {}, 
 
-    //called when any operation fails, where operation will be
-    //"validation", "insert", "update", "remove", or the method name.
+    // Called when any operation fails, where operation will be
+    // "validation", "insert", "update", "remove", or the method name.
     onError: function(operation, error, template) {},
     formToDoc: function(doc, ss, formId) {},
-    docToForm: function(doc, ss, formId) {}
+    docToForm: function(doc, ss, formId) {},
+
+    // Called at the beginning and end of submission, respectively.
+    // This is the place to disable/enable buttons or the form,
+    // show/hide a "Please wait" message, etc. If these hooks are
+    // not defined, then by default the submit button is disabled
+    // during submission.
+    beginSubmit: function(formId, template) {},
+    endSubmit: function(formId, template) {}
   }
 });
 ```
@@ -1264,6 +1275,27 @@ If you create a good set of templates for a commonly used framework or a
 common purpose, consider releasing it as a separate add-on package. The goal
 is to keep the built-in templates minimal but to provide many others through
 separate packages.
+
+## Making AutoForm-Ready Components
+
+Making a custom component for use with autoform is still a complicated task, but it will gradually become easier as the Blaze engine improves and work to make AutoForm more modular is completed. As of right now, you can put anything within an autoForm block and then tell AutoForm how to extract a value from it when the form is validated or submitted. The general steps are:
+
+1. Add your custom input or other markup within the `autoForm` block.
+2. Add the `data-schema-key` attribute to it, specifying the schema key for which the input provides a value.
+3. Add a class or other unique attribute to the element, so that you can provide a selector for it in the next step.
+4. Tell AutoForm how to extract a value from your input by providing a custom input value handler.
+
+An example custom input value handler:
+
+```js
+AutoForm.inputValueHandlers({
+  'input.myDoubledInput': function () {
+    return parseFloat(this.val()) * 2;
+  }
+});
+```
+
+For more examples, see the built-in handlers [here](https://github.com/aldeed/meteor-autoform/blob/master/autoform-inputs.js#L4). Custom handlers are used before default handlers, and the first one with a matching selector is used.
 
 ## Common Questions
 
