@@ -6,7 +6,7 @@ Package.describe({
 Package.on_use(function(api) {
   // Dependencies
   api.use(['simple-schema', 'check']);
-  api.use(['livedata', 'underscore', 'deps', 'templating', 'handlebars', 'moment', 'ui'], 'client');
+  api.use(['livedata', 'underscore', 'deps', 'templating', 'handlebars', 'moment-with-langs', 'ui'], 'client');
   // Weak dependencies
   api.use(['collection2', 'reload'], ['client'], {weak: true});
   // Imply SS to make sure SimpleSchema object is available to app
