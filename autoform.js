@@ -204,7 +204,30 @@ AutoForm.getFormValues = function autoFormGetFormValues(formId) {
  * This is a reactive method that will rerun whenever the current value of the requested field changes.
  */
 AutoForm.getFieldValue = function autoFormGetFieldValue(formId, fieldName) {
-  return getTrackedFieldValue(formId, fieldName);
+  formValues[formId] = formValues[formId] || {};
+  formValues[formId][fieldName] = formValues[formId][fieldName] || {_deps: new Deps.Dependency};
+  formValues[formId][fieldName]._deps.depend();
+  return formValues[formId][fieldName]._val;
+};
+
+/**
+ * @method AutoForm.validateField
+ * @public
+ * @param {String} formId The `id` attribute of the `autoForm` you want to validate.
+ * @param {String} fieldName The name of the field within the `autoForm` you want to validate.
+ * @param {Boolean} [skipEmpty=false] Set to `true` to skip validation if the field has no value. Useful for preventing `required` errors in form fields that the user has not yet filled out.
+ * @return {Boolean} Is it valid?
+ *
+ * In addition to returning a boolean that indicates whether the field is currently valid,
+ * this method causes the reactive validation messages to appear.
+ */
+AutoForm.validateField = function autoFormValidateField(formId, fieldName, skipEmpty) {
+  var template = templatesById[formId];
+  if (!template || template._notInDOM) {
+    throw new Error("validateField: There is currently no autoForm template rendered for the form with id " + formId);
+  }
+
+  return _validateField(fieldName, template, skipEmpty, false);
 };
 
 /*
@@ -233,9 +256,17 @@ Template.afQuickField.getTemplate =
 Template.afObjectField.getTemplate =
 Template.afArrayField.getTemplate =
 Template.quickForm.getTemplate =
-function afGenericGetTemplate(templateType, templateName) {
+function afGenericGetTemplate(templateType, templateName, fieldName, autoform) {
   var result;
 
+  // Template may be specified in schema.
+  // Skip for quickForm and afDeleteButton because they render a form
+  // and not a field.
+  if (fieldName && autoform) {
+    var defs = Utility.getDefs(autoform._af.ss, fieldName); //defs will not be undefined
+    templateName = templateName || (defs.autoform && defs.autoform.template);
+  }
+  
   var defaultTemplate = AutoForm.getDefaultTemplateForType(templateType) || AutoForm.getDefaultTemplate();
 
   // Determine template name
@@ -271,6 +302,7 @@ Template.autoForm.atts = function autoFormTplAtts() {
   }
   // After removing all of the props we know about, everything else should
   // become a form attribute.
+  // XXX Would be better to use a whitelist of HTML attributes allowed on form elements
   return _.omit(context, "schema", "collection", "validation", "doc", "resetOnSuccess", "type", "template");
 };
 
@@ -309,7 +341,7 @@ Template.autoForm.innerContext = function autoFormTplInnerContext(outerContext) 
     ss: ss,
     doc: context.doc,
     mDoc: mDoc,
-    validationType: context.validation || "submitThenKeyup",
+    validationType: (typeof context.validation === "undefined" ? "submitThenKeyup" : context.validation),
     submitType: context.type,
     resetOnSuccess: context.resetOnSuccess
   }};
@@ -368,131 +400,16 @@ UI.registerHelper('quickForm', function quickFormHelper() {
   throw new Error('Use the new syntax {{> quickForm}} rather than {{quickForm}}');
 });
 
-Template.quickForm.qfContext = function quickFormContext(atts) {
+Template.quickForm.innerContext = function quickFormContext(atts) {
   // Pass along quickForm context to autoForm context, minus a few
   // properties that are specific to quickForms.
   var qfAutoFormContext = _.omit(atts, "buttonContent", "buttonClasses", "fields", "omitFields");
 
-  return _.extend({
-    qfFormFields: qfFormFields,
-    qfNeedsButton: qfNeedsButton,
-    qfAutoFormContext: qfAutoFormContext
-  }, atts);
-};
-
-function qfFormFields() {
-  var context = this;
-  var ss = context._af.ss;
-
-  // Get the list of fields we want included
-  var fieldList;
-  if (context.fields) {
-    fieldList = context.fields;
-    if (typeof fieldList === "string") {
-      fieldList = fieldList.replace(/ /g, '').split(',');
-    }
-    if (!_.isArray(fieldList)) {
-      throw new Error('AutoForm: fields attribute must be an array or a string containing a comma-delimited list of fields');
-    }
-  } else {
-    // If we weren't given a fieldList, use all first level schema keys by default
-    fieldList = ss.firstLevelSchemaKeys() || [];
-  }
-
-  // If user wants to omit some fields, remove those from the array
-  if (context.omitFields) {
-    var omitFields = stringToArray(context.omitFields);
-    if (!_.isArray(omitFields)) {
-      throw new Error('AutoForm: omitFields attribute must be an array or a string containing a comma-delimited list of fields');
-    }
-    fieldList = _.difference(fieldList, omitFields);
-  }
-  return quickFieldFormFields(fieldList, context._af, true);
-}
-
-function quickFieldFormFields(fieldList, afContext, useAllowedValuesAsOptions) {
-  var ss = afContext.ss;
-  var addedFields = [];
-
-  // Filter out fields we truly don't want
-  fieldList = _.filter(fieldList, function shouldIncludeField(field) {
-    var fieldDefs = ss.schema(field);
-
-    // Don't include fields with denyInsert=true when it's an insert form
-    if (fieldDefs.denyInsert && afContext.submitType === "insert")
-      return false;
-
-    // Don't include fields with denyUpdate=true when it's an update form
-    if (fieldDefs.denyUpdate && afContext.submitType === "update")
-      return false;
-
-    return true;
-  });
-
-  // If we've filtered out all fields, we're done
-  if (!fieldList || !fieldList.length)
-    return [];
-
-  // Define extra properties to be added to all fields
-  var extendedAtts = {
-    autoform: {_af: afContext}
+  return {
+    qfAutoFormContext: qfAutoFormContext,
+    atts: atts
   };
-
-  if (afContext.submitType === "disabled") {
-    extendedAtts.disabled = "";
-  } else if (afContext.submitType === "readonly") {
-    extendedAtts.readonly = "";
-  }
-
-  // Define a function to get the necessary info for each requested field
-  function infoForField(field, extendedProps) {
-
-    // Ensure fields are not added more than once
-    if (_.contains(addedFields, field))
-      return;
-
-    // Get schema definitions for this field
-    var fieldDefs = ss.schema(field);
-
-    var info = {name: field};
-
-    // If there are allowedValues defined, use them as select element options
-    if (useAllowedValuesAsOptions) {
-      var av = fieldDefs.type === Array ? ss.schema(field + ".$").allowedValues : fieldDefs.allowedValues;
-      if (_.isArray(av)) {
-        info.options = "allowed";
-      }
-    }
-
-    addedFields.push(field);
-
-    // Return the field info along with the extra properties that
-    // all fields should have
-    return _.extend(info, extendedProps);
-  }
-
-  // Return info for all requested fields
-  return _.map(fieldList, function autoFormFormFieldsListEach(field) {
-    return infoForField(field, extendedAtts);
-  });
-}
-
-function qfNeedsButton() {
-  var context = this;
-  var needsButton = true;
-
-  switch (context._af.submitType) {
-    case "readonly":
-    case "disabled":
-      needsButton = false;
-      break;
-    default:
-      needsButton = true;
-      break;
-  }
-
-  return needsButton;
-}
+};
 
 /*
  * afFieldLabel
@@ -502,17 +419,52 @@ UI.registerHelper('afFieldLabel', function afFieldLabelHelper() {
   throw new Error('Use the new syntax {{> afFieldLabel name="name"}} rather than {{afFieldLabel "name"}}');
 });
 
-function getLabel() {
-  var c = Utility.normalizeContext(this, "afFieldLabel");
-  return c.af.ss.label(c.atts.name);
-}
+/*
+ * afFieldInput
+ */
 
-Template.afFieldLabel.labelContext = function getLabelContext(autoform, atts) {
-  return {
-    autoform: autoform,
-    atts: atts,
-    label: getLabel
-  };
+UI.registerHelper('afFieldInput', function afFieldInputHelper() {
+  throw new Error('Use the new syntax {{> afFieldInput name="name"}} rather than {{afFieldInput "name"}}');
+});
+
+Template.afFieldInput.getTemplateType = function getTemplateType() {
+  return getInputTemplateType(this.type);
+};
+
+Template.afFieldSelect.innerContext =
+Template.afFieldInput.innerContext = function afFieldInputInnerContext(options) {
+  var c = Utility.normalizeContext(options.hash, "afFieldInput and afFieldSelect");
+  var contentBlock = options.hash.contentBlock; // applies only to afFieldSelect
+
+  var ss = c.af.ss;
+  var defs = c.defs;
+
+  // Adjust for array fields if necessary
+  var expectsArray = false;
+  var defaultValue = defs.defaultValue; //make sure to use pre-adjustment defaultValue for arrays
+  if (defs.type === Array) {
+    defs = ss.schema(c.atts.name + ".$");
+
+    //if the user overrides the type to anything,
+    //then we won't be using a select box and
+    //we won't be expecting an array for the current value
+    expectsArray = !c.atts.type;
+  }
+
+  // Get inputType
+  var inputType = getInputType(c.atts, defs, expectsArray);
+
+  // Get input value
+  var value = getInputValue(c.atts.name, c.atts, expectsArray, inputType, c.atts.value, c.af.mDoc, defaultValue);
+
+  // Track field's value for reactive show/hide of other fields by value
+  updateTrackedFieldValue(c.af.formId, c.atts.name, value);
+  
+  // Get input data context
+  var iData = getInputData(defs, c.atts, value, inputType, ss.label(c.atts.name), expectsArray, c.af.submitType, c.af);
+  
+  // Return input data context
+  return _.extend({_af: c.af, contentBlock: contentBlock, type: inputType}, iData);
 };
 
 /*
@@ -522,72 +474,6 @@ Template.afFieldLabel.labelContext = function getLabelContext(autoform, atts) {
 UI.registerHelper('afFieldSelect', function afFieldSelectHelper() {
   throw new Error('Use the new syntax {{> afFieldSelect name="name"}} rather than {{afFieldSelect "name"}}');
 });
-
-Template.afFieldSelect.inputContext = function afFieldSelectInputContext(options) {
-  var ctx = ((options || {}).hash || {});
-  var c = ctx.outerContext;
-  var iData = getInputData(c.defs, c.atts, c.value, "select", c.ss.label(c.atts.name), c.expectsArray);
-  return _.extend({contentBlock: ctx.contentBlock}, iData);
-};
-
-/*
- * afFieldInput
- */
-
-UI.registerHelper('afFieldInput', function afFieldInputHelper() {
-  throw new Error('Use the new syntax {{> afFieldInput name="name"}} rather than {{afFieldInput "name"}}');
-});
-
-Template.afFieldInput.inputOuterContext =
-Template.afFieldSelect.inputOuterContext =
-function (options) {
-  var c = Utility.normalizeContext(options.hash, "afFieldInput");
-
-  var ss = c.af.ss;
-  var defs = Utility.getDefs(ss, c.atts.name); //defs will not be undefined
-
-  // Get schema type
-  var schemaType = defs.type;
-  // Adjust for array fields if necessary
-  var expectsArray = false;
-  var defaultValue = defs.defaultValue; //make sure to use pre-adjustment defaultValue for arrays
-  if (schemaType === Array) {
-    defs = ss.schema(c.atts.name + ".$");
-    schemaType = defs.type;
-
-    //if the user overrides the type to anything,
-    //then we won't be using a select box and
-    //we won't be expecting an array for the current value
-    expectsArray = !c.atts.type;
-  }
-
-  // Get input value
-  var value = getInputValue(c.atts.name, c.atts.value, c.af.mDoc, expectsArray, defaultValue);
-
-  // Track field's value for reactive show/hide of other fields by value
-  updateTrackedFieldValue(c.af.formId, c.atts.name, value);
-
-  // Get type
-  var type = getInputType(c.atts, defs, value);
-
-  // Get template type
-  var templateType = getInputTemplateType(c.atts, type, schemaType, expectsArray);
-
-  return {
-    defs: defs,
-    ss: ss,
-    atts: c.atts,
-    type: type,
-    value: value,
-    expectsArray: expectsArray,
-    templateType: templateType
-  };
-};
-
-Template.afFieldInput.inputContext = function (options) {
-  var c = ((options || {}).hash || {}).outerContext;
-  return getInputData(c.defs, c.atts, c.value, c.type, c.ss.label(c.atts.name), c.expectsArray);
-};
 
 /*
  * afDeleteButton
@@ -622,8 +508,7 @@ Template.afArrayField.innerContext = function (options) {
   arrayTracker.initField(formId, name, ss, docCount, fieldMinCount, fieldMaxCount);
 
   return {
-    name: name,
-    label: ss.label(name),
+    atts: c.atts,
     autoform: c.afc
   };
 };
@@ -635,43 +520,6 @@ Template.afArrayField.innerContext = function (options) {
 UI.registerHelper('afObjectField', function afObjectFieldHelper() {
   throw new Error('Use the syntax {{> afObjectField name="name"}} rather than {{afObjectField "name"}}');
 });
-
-Template.afObjectField.innerContext = function (options) {
-  var c = Utility.normalizeContext(options.hash, "afObjectField");
-  var name = c.atts.name;
-  var ss = c.af.ss;
-
-  // Get list of field names that are descendants of this field's name
-  var fields = autoFormChildKeys(ss, name);
-
-  // Tack child field name on to end of parent field name. This
-  // ensures that we keep the desired array index for array items.
-  fields = _.map(fields, function (field) {
-    return name + "." + field;
-  });
-
-  // Get rid of nested fields specified in omitFields
-  if(typeof c.afc.omitFields !== "undefined"){
-    var omitFields = stringToArray(c.afc.omitFields);
-    fields = _.reject(fields,function(f){
-       return _.contains(omitFields,SimpleSchema._makeGeneric(f))
-    });
-  }
-  var formFields = quickFieldFormFields(fields, c.af, true);
-
-  return {
-    fields: formFields,
-    label: ss.label(name)
-  };
-};
-
-function stringToArray(s){
-  if (typeof s === "string") {
-    return s.replace(/ /g, '').split(',');
-  }else{
-    return s;
-  }
-};
 
 /*
  * afQuickField
@@ -721,10 +569,9 @@ Template.afQuickField.innerContext = function afQuickFieldInnerContext(options) 
 
   var labelAtts = quickFieldLabelAtts(c.atts, c.afc);
   var inputAtts = quickFieldInputAtts(c.atts, c.afc);
-  var defs = Utility.getDefs(ss, c.atts.name); //defs will not be undefined
 
   return {
-    skipLabel: (c.atts.label === false || (defs.type === Boolean && !("select" in c.atts) && !("radio" in c.atts))),
+    skipLabel: (c.atts.label === false || (c.defs.type === Boolean && !("select" in c.atts) && !("radio" in c.atts))),
     afFieldLabelAtts: labelAtts,
     afFieldInputAtts: inputAtts,
     atts: {name: inputAtts.name, autoform: inputAtts.autoform}
@@ -733,152 +580,31 @@ Template.afQuickField.innerContext = function afQuickFieldInnerContext(options) 
 
 Template.afQuickField.isGroup = function afQuickFieldIsGroup(options) {
   var c = Utility.normalizeContext(options.hash, "afQuickField");
-  var ss = c.af.ss;
-  var defs = Utility.getDefs(ss, c.atts.name); //defs will not be undefined
-
-  return (defs.type === Object);
+  // Render a group of fields if we expect an Object
+  return (c.defs.type === Object);
 };
 
 Template.afQuickField.isFieldArray = function afQuickFieldIsFieldArray(options) {
   var c = Utility.normalizeContext(options.hash, "afQuickField");
-  var ss = c.af.ss;
-  var defs = Utility.getDefs(ss, c.atts.name); //defs will not be undefined
 
-  // Render an array of fields if we expect an array and we don't have options
-  return (defs.type === Array && !c.atts.options);
+  // Render an array of fields if we expect an Array and we don't have options
+  return (c.defs.type === Array && !c.atts.options);
 };
 
 /*
  * afEachArrayItem
  */
 
-Template.afEachArrayItem.innerContext = function afEachArrayItemInnerContext(name, af, minCount, maxCount) {
-  if (!af || !af._af) {
-    throw new Error(name + " must be used within an autoForm block");
-  }
-
-  var afContext = af._af;
-  var ss = afContext.ss;
-  var formId = afContext.formId;
+Template.afEachArrayItem.innerContext = function afEachArrayItemInnerContext(options) {
+  var c = Utility.normalizeContext(options.hash, "afEachArrayItem");
+  var formId = c.af.formId;
+  var name = c.atts.name;
   var docCount = fd.getDocCountForField(formId, name);
 
-  arrayTracker.initField(formId, name, ss, docCount, minCount, maxCount);
+  arrayTracker.initField(formId, name, c.af.ss, docCount, c.atts.minCount, c.atts.maxCount);
   
   return arrayTracker.getField(formId, name);
 };
-
-/*
- * afFieldMessage
- */
-
-UI.registerHelper('afFieldMessage', function autoFormFieldMessage(options) {
-  //help users transition from positional name arg
-  if (typeof options === "string") {
-    throw new Error('Use the new syntax {{afFieldMessage name="name"}} rather than {{afFieldMessage "name"}}');
-  }
-
-  var hash = (options || {}).hash || {};
-  var afContext = hash.autoform && hash.autoform._af || this && this._af;
-  var ss = afContext.ss;
-  if (!ss) {
-    throw new Error("afFieldMessage helper must be used within an autoForm block");
-  }
-
-  Utility.getDefs(ss, hash.name); //for side effect of throwing errors when name is not in schema
-  return ss.namedContext(afContext.formId).keyErrorMessage(hash.name);
-});
-
-/*
- * afFieldIsInvalid
- */
-
-UI.registerHelper('afFieldIsInvalid', function autoFormFieldIsInvalid(options) {
-  //help users transition from positional name arg
-  if (typeof options === "string") {
-    throw new Error('Use the new syntax {{#if afFieldIsInvalid name="name"}} rather than {{#if afFieldIsInvalid "name"}}');
-  }
-
-  var hash = (options || {}).hash || {};
-  var afContext = hash.autoform && hash.autoform._af || this && this._af;
-  var ss = afContext.ss;
-  if (!ss) {
-    throw new Error("afFieldIsInvalid helper must be used within an autoForm block");
-  }
-
-  Utility.getDefs(ss, hash.name); //for side effect of throwing errors when name is not in schema
-  return ss.namedContext(afContext.formId).keyIsInvalid(hash.name);
-});
-
-/*
- * afArrayFieldHasMoreThanMinimum
- */
-
-UI.registerHelper('afArrayFieldHasMoreThanMinimum', function autoFormArrayFieldHasMoreThanMinimum(options) {
-  var hash = (options || {}).hash || {};
-  var afContext = hash.autoform && hash.autoform._af || this && this._af;
-  var ss = afContext.ss;
-  if (!ss) {
-    throw new Error("afArrayFieldHasMoreThanMinimum helper must be used within an autoForm block");
-  }
-
-  Utility.getDefs(ss, hash.name); //for side effect of throwing errors when name is not in schema
-  
-  var range = arrayTracker.getMinMax(ss, hash.name, hash.minCount, hash.maxCount);
-  var visibleCount = arrayTracker.getVisibleCount(afContext.formId, hash.name);
-  return (visibleCount > range.minCount);
-});
-
-/*
- * afArrayFieldHasLessThanMaximum
- */
-
-UI.registerHelper('afArrayFieldHasLessThanMaximum', function autoFormArrayFieldHasLessThanMaximum(options) {
-  var hash = (options || {}).hash || {};
-  var afContext = hash.autoform && hash.autoform._af || this && this._af;
-  var ss = afContext.ss;
-  if (!ss) {
-    throw new Error("afArrayFieldHasLessThanMaximum helper must be used within an autoForm block");
-  }
-
-  Utility.getDefs(ss, hash.name); //for side effect of throwing errors when name is not in schema
-  
-  var range = arrayTracker.getMinMax(ss, hash.name, hash.minCount, hash.maxCount);
-  var visibleCount = arrayTracker.getVisibleCount(afContext.formId, hash.name);
-  return (visibleCount < range.maxCount);
-});
-
-/*
- * afFieldValueIs
- */
-
-UI.registerHelper('afFieldValueIs', function autoFormFieldValueIs(options) {
-  var hash = (options || {}).hash || {};
-  var afContext = hash.autoform && hash.autoform._af || this && this._af;
-  var ss = afContext.ss;
-  if (!ss) {
-    throw new Error("afFieldValueIs helper must be used within an autoForm block");
-  }
-
-  Utility.getDefs(ss, hash.name); //for side effect of throwing errors when name is not in schema
-  return getTrackedFieldValue(afContext.formId, hash.name) === hash.value;
-});
-
-/*
- * afFieldValueContains
- */
-
-UI.registerHelper('afFieldValueContains', function autoFormFieldValueContains(options) {
-  var hash = (options || {}).hash || {};
-  var afContext = hash.autoform && hash.autoform._af || this && this._af;
-  var ss = afContext.ss;
-  if (!ss) {
-    throw new Error("afFieldValueContains helper must be used within an autoForm block");
-  }
-
-  Utility.getDefs(ss, hash.name); //for side effect of throwing errors when name is not in schema
-  var currentValue = getTrackedFieldValue(afContext.formId, hash.name);
-  return _.isArray(currentValue) && _.contains(currentValue, hash.value);
-});
 
 /*
  * Private Helper Functions
@@ -962,7 +688,15 @@ getFormValues = function getFormValues(template, formId, ss) {
   return result;
 };
 
-function getInputValue(name, value, mDoc, expectsArray, defaultValue) {
+/*
+ * Gets the value that should be shown/selected in the input. Returns
+ * a string or an array of strings. The value used,
+ * in order of preference, is one of:
+ * * The `value` attribute provided
+ * * The value that is set in the `doc` provided on the containing autoForm
+ * * The `defaultValue` from the schema
+ */
+function getInputValue(name, atts, expectsArray, inputType, value, mDoc, defaultValue) {
   if (typeof value === "undefined") {
     // Get the value for this key in the current document
     if (mDoc) {
@@ -981,12 +715,23 @@ function getInputValue(name, value, mDoc, expectsArray, defaultValue) {
   // Change null or undefined to an empty string
   value = (value == null) ? '' : value;
 
-  function stringValue(val, skipDates) {
+  function stringValue(val) {
     if (val instanceof Date) {
-      if (skipDates) {
-        return val;
-      } else {
-        return Utility.dateToDateStringUTC(val);
+      //convert Dates to string value based on field inputType
+      if (value instanceof Date) {
+        if (inputType === "datetime") {
+          return Utility.dateToNormalizedForcedUtcGlobalDateAndTimeString(val);
+        } else if (inputType === "datetime-local") {
+          var offset = atts.offset || "Z";
+          // TODO switch to use timezoneId attribute instead of offset
+          return Utility.dateToNormalizedLocalDateAndTimeString(val, offset);
+        } else {
+          // This fallback will be used for type="date" as well
+          // as for select arrays, since it would not make much
+          // sense to do anything other than the date portion
+          // in select controls.
+          return Utility.dateToDateStringUTC(val);
+        }
       }
     } else if (val.toString) {
       return val.toString();
@@ -1010,25 +755,22 @@ function getInputValue(name, value, mDoc, expectsArray, defaultValue) {
       return stringValue(v);
     });
   } else {
-    // We will convert dates to a string later, after we
-    // know what the field type will be.
-    // Convert everything else to a string now.
-    value = stringValue(value, true);
+    value = stringValue(value);
   }
 
-  // We return either a string, an array of strings, or an instance of Date
+  // We return either a string or an array of strings
   return value;
 }
 
-function getInputData(defs, hash, value, type, label, expectsArray) {
+function getInputData(defs, hash, value, inputType, label, expectsArray, submitType, _af) {
   var schemaType = defs.type;
+
   // We don't want to alter the original hash, so we clone it and
   // remove some stuff that should not be HTML attributes
+  // XXX It would be better to use a whitelist of allowed attributes
   var inputAtts = _.omit(hash,
-          "name",
           "autoform",
           "value",
-          "data-schema-key",
           "firstOption",
           "radio",
           "select",
@@ -1037,6 +779,7 @@ function getInputData(defs, hash, value, type, label, expectsArray) {
           "falseLabel",
           "options",
           "offset",
+          "timezoneId",
           "template");
 
   // Add required to every type of element, if required
@@ -1044,22 +787,20 @@ function getInputData(defs, hash, value, type, label, expectsArray) {
     inputAtts.required = "";
   }
 
+  // Add disabled or readonly if the form has that submit type
+  if (submitType === "disabled") {
+    inputAtts.disabled = "";
+  } else if (submitType === "readonly") {
+    inputAtts.readonly = "";
+  }
+
   var min = (typeof defs.min === "function") ? defs.min() : defs.min;
   var max = (typeof defs.max === "function") ? defs.max() : defs.max;
 
-  if (type === "datetime-local") {
+  if (inputType === "datetime-local") {
+    // `offset` is deprecated and replaced by `timezoneId`
     inputAtts["data-offset"] = hash.offset || "Z";
-  }
-
-  //convert Date value to required string value based on field type
-  if (value instanceof Date) {
-    if (type === "date") {
-      value = Utility.dateToDateStringUTC(value);
-    } else if (type === "datetime") {
-      value = Utility.dateToNormalizedForcedUtcGlobalDateAndTimeString(value);
-    } else if (type === "datetime-local") {
-      value = Utility.dateToNormalizedLocalDateAndTimeString(value, inputAtts["data-offset"]);
-    }
+    inputAtts["data-timezoneId"] = hash.timezoneId || "UTC";
   }
 
   // Extract settings from hash
@@ -1067,8 +808,8 @@ function getInputData(defs, hash, value, type, label, expectsArray) {
   var radio = hash.radio;
   var select = hash.select;
   var noselect = hash.noselect;
-  var trueLabel = hash.trueLabel;
-  var falseLabel = hash.falseLabel;
+  var trueLabel = hash.trueLabel || "True";
+  var falseLabel = hash.falseLabel || "False";
   var selectOptions = hash.options;
 
   // Handle options="allowed"
@@ -1082,6 +823,11 @@ function getInputData(defs, hash, value, type, label, expectsArray) {
       return {label: label, value: v};
     });
   }
+  // If options are specified in the schema, they may be a function
+  // that has not yet been evaluated.
+  else if (typeof selectOptions === "function") {
+    selectOptions = selectOptions();
+  }
 
   // Set placeholder to label from schema if requested
   if (hash.placeholder === "schemaLabel") {
@@ -1092,20 +838,28 @@ function getInputData(defs, hash, value, type, label, expectsArray) {
   // in a simple way, we add the attributes to the HTML
   // only if their value is `true`. That is, unlike in
   // HTML, their mere presence does not matter.
-  _.each(["disabled", "readonly", "checked", "required"], function (booleanProp) {
-    // For historical reasons, we treat the string "true" and an empty string as `true`, too
-    if (_.has(hash, booleanProp) && hash[booleanProp] !== true && hash[booleanProp] !== "true" && hash[booleanProp] !== "") {
+  _.each(["disabled", "readonly", "checked", "required", "autofocus"], function (booleanProp) {
+    if (!_.has(hash, booleanProp))
+      return;
+
+    // For historical reasons, we treat the string "true" and an empty string as `true`, too.
+    // But an empty string value results in the cleanest rendered output for boolean props,
+    // so we standardize as that.
+    if (hash[booleanProp] === true || hash[booleanProp] === "true" || hash[booleanProp] === "") {
+      inputAtts[booleanProp] = "";
+    } else {
+      // If the value is anything else, we don't render it
       delete inputAtts[booleanProp];
     }
   });
 
+  // Add data-schema-key to every type of element
+  inputAtts['data-schema-key'] = inputAtts['name'];
+
   // Determine what options to use
   var data = {};
 
-  // Add name to every type of element
-  // XXX Could probably leave name in inputAtts and simplify all templates
-  data.name = hash.name;
-
+  data.name = inputAtts['name'];
   data.expectsArray = expectsArray;
 
   if (selectOptions) {
@@ -1115,6 +869,28 @@ function getInputData(defs, hash, value, type, label, expectsArray) {
     if (noselect && expectsArray) {
       inputAtts["class"] = (inputAtts["class"] || "") + " autoform-array-item";
     }
+    // If rendering a select element
+    if (!noselect) {
+      inputAtts.autocomplete = "off"; //can fix issues with some browsers selecting the firstOption instead of the selected option
+      if (expectsArray) {
+        inputAtts.multiple = "";
+      }
+      // If a firstOption was provided, add that to the items list first
+      if (firstOption && !expectsArray) {
+        data.items.push({
+          name: data.name,
+          label: firstOption,
+          value: "",
+          // _id must be included because it is a special property that
+          // #each uses to track unique list items when adding and removing them
+          // See https://github.com/meteor/meteor/issues/2174
+          _id: "",
+          selected: false,
+          atts: inputAtts
+        });
+      }
+    }
+    // Add all defined options
     _.each(selectOptions, function(opt) {
       var selected = expectsArray ? _.contains(value, opt.value.toString()) : (opt.value.toString() === value.toString());
       data.items.push({
@@ -1125,78 +901,65 @@ function getInputData(defs, hash, value, type, label, expectsArray) {
         // #each uses to track unique list items when adding and removing them
         // See https://github.com/meteor/meteor/issues/2174
         _id: opt.value,
-        checked: selected ? "checked" : "",
-        selected: selected ? "selected" : "",
+        selected: selected,
         atts: inputAtts
       });
     });
-    if (!noselect) {
-      inputAtts.autocomplete = "off"; //can fix issues with some browsers selecting the firstOption instead of the selected option
-      if (expectsArray) {
-        inputAtts.multiple = "";
-      }
-      data.firstOption = (firstOption && !expectsArray) ? firstOption : "";
-      // XXX should rework all templates to extend class attr rather than
-      // using separate cls
-      data.cls = inputAtts["class"] || "";
-      inputAtts = _.omit(inputAtts, "class");
-      data.atts = inputAtts;
-    }
-  } else if (type === "textarea") {
+  } else if (inputType === "textarea") {
     if (typeof inputAtts.maxlength === "undefined" && typeof max === "number") {
       inputAtts.maxlength = max;
     }
-    data.cls = inputAtts["class"] || "";
-    inputAtts = _.omit(inputAtts, "class");
-    data.atts = inputAtts;
     data.value = value;
-  } else if (type === "contenteditable") {
+  } else if (inputType === "contenteditable") {
     if (typeof inputAtts['data-maxlength'] === "undefined" && typeof max === "number") {
       inputAtts['data-maxlength'] = max;
     }
-    data.atts = inputAtts;
     data.value = value;
-  } else if (type === "boolean") {
+  } else if (inputType === "boolean-radios" || inputType === "boolean-select" || inputType === "boolean-checkbox") {
     value = (value === "true") ? true : false;
-    var items = [
-      {
-        name: data.name,
-        value: "false",
-        checked: !value ? "checked" : "",
-        selected: !value ? "selected" : "",
-        label: falseLabel
-      },
-      {
-        name: data.name,
-        value: "true",
-        checked: value ? "checked" : "",
-        selected: value ? "selected" : "",
-        label: trueLabel
-      }
-    ];
+
     // add autoform-boolean class, which we use when building object
     // from form values later
     inputAtts["class"] = (inputAtts["class"] || "") + " autoform-boolean";
-    if (radio) {
-      data.items = items;
-      data.items[0].atts = inputAtts;
-      data.items[1].atts = inputAtts;
-    } else if (select) {
-      data.items = items;
-      data.cls = inputAtts["class"];
-      inputAtts = _.omit(inputAtts, "class");
-      data.atts = inputAtts;
+
+    function getItems() {
+      return [
+        {
+          name: data.name,
+          value: "false",
+          // _id must be included because it is a special property that
+          // #each uses to track unique list items when adding and removing them
+          // See https://github.com/meteor/meteor/issues/2174
+          _id: "false",
+          selected: !value,
+          label: falseLabel,
+          atts: inputAtts
+        },
+        {
+          name: data.name,
+          value: "true",
+          // _id must be included because it is a special property that
+          // #each uses to track unique list items when adding and removing them
+          // See https://github.com/meteor/meteor/issues/2174
+          _id: "true",
+          selected: value,
+          label: trueLabel,
+          atts: inputAtts
+        }
+      ];
+    }
+    
+    if (inputType === "boolean-radios" || inputType === "boolean-select") {
+      data.items = getItems();
     } else {
-      //don't add required attribute to this one because some browsers assume that to mean that it must be checked, which is not what we mean by "required"
+      //don't add required attribute to checkboxes because some browsers assume that to mean that it must be checked, which is not what we mean by "required"
       delete inputAtts.required;
-      data.label = label;
       data.value = "true";
-      data.checked = value ? "checked" : "";
-      data.atts = inputAtts;
+      data.selected = value;
     }
   } else {
-    // All other input types
-    switch (type) {
+    // All other inputTypes
+    switch (inputType) {
       case "number":
         if (typeof inputAtts.max === "undefined" && typeof max === "number") {
           inputAtts.max = max;
@@ -1226,92 +989,87 @@ function getInputData(defs, hash, value, type, label, expectsArray) {
         break;
       case "datetime-local":
         if (typeof inputAtts.max === "undefined" && max instanceof Date) {
-          inputAtts.max = Utility.dateToNormalizedLocalDateAndTimeString(max, hash["data-offset"]);
+          inputAtts.max = Utility.dateToNormalizedLocalDateAndTimeString(max, inputAtts["data-offset"]);
         }
         if (typeof inputAtts.min === "undefined" && min instanceof Date) {
-          inputAtts.min = Utility.dateToNormalizedLocalDateAndTimeString(min, hash["data-offset"]);
+          inputAtts.min = Utility.dateToNormalizedLocalDateAndTimeString(min, inputAtts["data-offset"]);
         }
         break;
     }
 
     if (typeof inputAtts.maxlength === "undefined"
             && typeof max === "number"
-            && _.contains(["text", "email", "search", "password", "tel", "url"], type)
+            && _.contains(["text", "email", "search", "password", "tel", "url"], inputType)
             ) {
       inputAtts.maxlength = max;
     }
 
-    data.type = type;
+    data.type = inputType;
     data.value = value;
-    data.cls = inputAtts["class"] || "";
-    inputAtts = _.omit(inputAtts, "class");
-    data.atts = inputAtts;
   }
+
+  // We set this one down here because some of the code paths above alter inputAtts
+  data.atts = inputAtts;
 
   return data;
 }
 
-function getInputType(hash, defs, value) {
+function getInputType(atts, defs, expectsArray) {
   var schemaType = defs.type;
-  var valHasLineBreaks = typeof value === "string" ? (value.indexOf("\n") !== -1) : false;
   var max = (typeof defs.max === "function") ? defs.max() : defs.max;
 
   var type = "text";
-  if (hash.type) {
-    type = hash.type;
+  if (atts.type) {
+    type = atts.type;
+  } else if (atts.options) {
+    if (atts.noselect) {
+      if (expectsArray) {
+        type = "select-checkbox";
+      } else {
+        type = "select-radio";
+      }
+    } else {
+      type = "select";
+    }
   } else if (schemaType === String && defs.regEx === SimpleSchema.RegEx.Email) {
     type = "email";
   } else if (schemaType === String && defs.regEx === SimpleSchema.RegEx.Url) {
     type = "url";
-  } else if (schemaType === String && (hash.rows || valHasLineBreaks || max >= 150)) {
+  } else if (schemaType === String && (atts.rows || max >= 150)) {
     type = "textarea";
   } else if (schemaType === Number) {
     type = "number";
   } else if (schemaType === Date) {
     type = "date";
   } else if (schemaType === Boolean) {
-    type = "boolean";
+    if (atts.radio) {
+      type = "boolean-radios";
+    } else if (atts.select) {
+      type = "boolean-select";
+    } else {
+      type = "boolean-checkbox";
+    }
   }
   return type;
 }
 
-function getInputTemplateType(atts, type, schemaType, expectsArray) {
-  // Extract settings from attributes
-  var radio = atts.radio;
-  var select = atts.select;
-  var noselect = atts.noselect;
-  var selectOptions = atts.options;
+function getInputTemplateType(type) {
+  // Special types
+  var typeMap = {
+    "select": "afSelect",
+    "select-checkbox": "afCheckboxGroup",
+    "select-radio": "afRadioGroup",
+    "textarea": "afTextarea",
+    "contenteditable": "afContenteditable",
+    "boolean-radios": "afRadioGroup",
+    "boolean-select": "afSelect",
+    "boolean-checkbox": "afCheckbox",
+  };
 
-  // Determine which template to render
-  var templateType;
-  if (selectOptions) {
-    if (noselect) {
-      if (expectsArray) {
-        templateType = "afCheckboxGroup";
-      } else {
-        templateType = "afRadioGroup";
-      }
-    } else {
-      templateType = "afSelect";
-    }
-  } else if (type === "textarea") {
-    templateType = "afTextarea";
-  } else if (type === "contenteditable") {
-    templateType = "afContenteditable";
-  } else if (type === "boolean") {
-    if (radio) {
-      templateType = "afRadioGroup";
-    } else if (select) {
-      templateType = "afSelect";
-    } else {
-      templateType = "afCheckbox";
-    }
-  } else {
-    // All other input types
-    templateType = "afInput";
-  }
-
-  return templateType;
+  // All other input types
+  var defaultTemplateType = "afInput";
+  
+  return typeMap[type] || defaultTemplateType;
 }
 
 function _validateField(key, template, skipEmpty, onlyIfAlreadyInvalid) {
@@ -1332,65 +1090,43 @@ function _validateField(key, template, skipEmpty, onlyIfAlreadyInvalid) {
 
   // Clean and validate doc
   if (context.type === "update") {
-
-    // Skip validation if skipEmpty is true and the field we're validating
-    // has no value.
-    if (skipEmpty && !Utility.objAffectsKey(form.updateDoc, key))
-      return; //skip validation
-
-    // getFormValues did some cleaning but didn't add auto values; add them now
-    ss.clean(form.updateDoc, {
-      isModifier: true,
-      filter: false,
-      autoConvert: false,
-      extendAutoValueContext: {
-        userId: (Meteor.userId && Meteor.userId()) || null,
-        isInsert: false,
-        isUpdate: true,
-        isUpsert: false,
-        isFromTrustedCode: false
-      }
-    });
-    ss.namedContext(formId).validateOne(form.updateDoc, key, {
-      modifier: true,
-      extendedCustomContext: {
-        userId: (Meteor.userId && Meteor.userId()) || null,
-        isInsert: false,
-        isUpdate: true,
-        isUpsert: false,
-        isFromTrustedCode: false
-      }
-    });
+    var docToValidate = form.updateDoc;
+    var isModifier = true;
   } else {
-
-    // Skip validation if skipEmpty is true and the field we're validating
-    // has no value.
-    if (skipEmpty && !Utility.objAffectsKey(form.insertDoc, key))
-      return; //skip validation
-
-    // getFormValues did some cleaning but didn't add auto values; add them now
-    ss.clean(form.insertDoc, {
-      filter: false,
-      autoConvert: false,
-      extendAutoValueContext: {
-        userId: (Meteor.userId && Meteor.userId()) || null,
-        isInsert: true,
-        isUpdate: false,
-        isUpsert: false,
-        isFromTrustedCode: false
-      }
-    });
-    ss.namedContext(formId).validateOne(form.insertDoc, key, {
-      modifier: false,
-      extendedCustomContext: {
-        userId: (Meteor.userId && Meteor.userId()) || null,
-        isInsert: true,
-        isUpdate: false,
-        isUpsert: false,
-        isFromTrustedCode: false
-      }
-    });
+    var docToValidate = form.insertDoc;
+    var isModifier = false;
   }
+
+  // Skip validation if skipEmpty is true and the field we're validating
+  // has no value.
+  if (skipEmpty && !Utility.objAffectsKey(docToValidate, key))
+    return; //skip validation
+
+  var userId = (Meteor.userId && Meteor.userId()) || null;
+
+  // getFormValues did some cleaning but didn't add auto values; add them now
+  ss.clean(docToValidate, {
+    isModifier: isModifier,
+    filter: false,
+    autoConvert: false,
+    extendAutoValueContext: {
+      userId: userId,
+      isInsert: !isModifier,
+      isUpdate: isModifier,
+      isUpsert: false,
+      isFromTrustedCode: false
+    }
+  });
+  return ss.namedContext(formId).validateOne(docToValidate, key, {
+    modifier: isModifier,
+    extendedCustomContext: {
+      userId: userId,
+      isInsert: !isModifier,
+      isUpdate: isModifier,
+      isUpsert: false,
+      isFromTrustedCode: false
+    }
+  });
 }
 
 //throttling function that calls out to _validateField
@@ -1414,10 +1150,3 @@ updateTrackedFieldValue = function updateTrackedFieldValue(formId, key, val) {
   formValues[formId][key]._val = val;
   formValues[formId][key]._deps.changed();
 };
-
-function getTrackedFieldValue(formId, key) {
-  formValues[formId] = formValues[formId] || {};
-  formValues[formId][key] = formValues[formId][key] || {_deps: new Deps.Dependency};
-  formValues[formId][key]._deps.depend();
-  return formValues[formId][key]._val;
-}

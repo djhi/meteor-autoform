@@ -428,10 +428,61 @@ Utility = {
       throw new Error(name + " must be used within an autoForm block");
     }
 
+    var defs = Utility.getDefs(afContext._af.ss, atts.name); //defs will not be undefined
+
+    // For array fields, `allowedValues` is on the array item definition
+    if (defs.type === Array) {
+      var itemDefs = Utility.getDefs(afContext._af.ss, atts.name + ".$");
+      var allowedValues = itemDefs.allowedValues;
+    } else {
+      var allowedValues = defs.allowedValues;
+    }
+
+    var defaultAttributes = defs.autoform || {};
+
+    // This is where we add default attributes specified in
+    // defs.autoform. We don't add them for afFieldLabel.
+    if (name === "afFieldLabel") {
+      if (_.has(atts, "options")) {
+        delete atts.options;
+      }
+    } else {
+      // If options="auto", we want to use defs.autoform.options
+      // if specified and otherwise fall back to "allowed"
+      if (defaultAttributes.options && atts.options === "auto")
+        delete atts.options;
+      // "autoform" option in the schema provides default atts
+      atts = _.extend({}, defaultAttributes, atts);
+      // If still set to "auto", then there were no options in defs, so we use "allowed"
+      if (atts.options === "auto") {
+        if (allowedValues) {
+          atts.options = "allowed";
+        } else {
+          delete atts.options;
+        }
+      }
+    }
+
     return {
       afc: afContext,
       af: afContext._af,
-      atts: atts
+      atts: atts,
+      defs: defs
     };
+  },
+  /**
+   * @method Utility.stringToArray
+   * @private
+   * @param {String|Array} A variable that might be a string or an array.
+   * @return {Array} The array, building it from a comma-delimited string if necessary.
+   */
+  stringToArray: function stringToArray(s, errorMessage) {
+    if (typeof s === "string") {
+      return s.replace(/ /g, '').split(',');
+    } else if (!_.isArray(s)) {
+      throw new Error(errorMessage);
+    } else {
+      return s;
+    }
   }
 };

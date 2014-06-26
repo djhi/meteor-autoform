@@ -4,17 +4,18 @@ Package.describe({
 });
 
 Package.on_use(function(api) {
-  api.use(['underscore', 'deps', 'templating', 'handlebars', 'moment-with-langs', 'ui'], 'client');
-  api.use('reload', 'client', {weak: true});
-  api.use('collection2', ['client', 'server'], {weak: true});
-  api.use('simple-schema', ['client', 'server']);
-
-  if (typeof api.export !== 'undefined') {
-    api.use('livedata', 'client');
-    api.imply('simple-schema', 'client');
-    api.export('AutoForm', 'client');
-    api.export('Utility', 'client', {testOnly: true});
-  }
+  // Dependencies
+  api.use(['simple-schema', 'check']);
+  api.use(['livedata', 'underscore', 'deps', 'templating', 'handlebars', 'moment', 'ui'], 'client');
+  // Weak dependencies
+  api.use(['collection2', 'reload'], ['client'], {weak: true});
+  // Imply SS to make sure SimpleSchema object is available to app
+  api.imply('simple-schema', 'client');
+  // Exports
+  api.export('AutoForm', 'client');
+  api.export('Utility', 'client', {testOnly: true});
+  // Files
+  api.add_files(['autoform-common.js']);
 
   api.add_files([
     // bootstrap3 Template
@@ -26,9 +27,13 @@ Package.on_use(function(api) {
     // bootstrap3-horizontal Template
     'templates/bootstrap3-horizontal/bootstrap3-horizontal.html',
     'templates/bootstrap3-horizontal/bootstrap3-horizontal.js',
+    'templates/bootstrap3-horizontal/bootstrap3-horizontal.css',
     // plain Template
     'templates/plain/plain.html',
     'templates/plain/plain.js',
+    // plain-fieldset Template
+    'templates/plain-fieldset/plain-fieldset.html',
+    'templates/plain-fieldset/plain-fieldset.js',
     // plain-span Template
     'templates/plain-span/plain-span.html',
     'templates/plain-span/plain-span.js',
@@ -36,11 +41,12 @@ Package.on_use(function(api) {
     'autoform.html',
     'utility.js',
     'form-preserve.js',
-    'hooks.js',
+    'autoform-hooks.js',
     'autoform-inputs.js',
     'autoform-formdata.js',
     'autoform-arrays.js',
     'autoform.js',
+    'autoform-helpers.js',
     'autoform-events.js'
   ], 'client');
 });

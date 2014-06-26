@@ -17,7 +17,7 @@ function doBefore(docId, doc, hooks, template, name) {
 }
 
 function beginSubmit(formId, template) {
-  if (!template)
+  if (!template || template._notInDOM)
     return;
   // Get user-defined hooks
   var hooks = Hooks.getHooks(formId, 'beginSubmit');
@@ -35,7 +35,7 @@ function beginSubmit(formId, template) {
 }
 
 function endSubmit(formId, template) {
-  if (!template)
+  if (!template || template._notInDOM)
     return;
   // Get user-defined hooks
   var hooks = Hooks.getHooks(formId, 'endSubmit');
@@ -67,6 +67,9 @@ Template.autoForm.events({
     var validationType = context.validation || "submitThenKeyup";
     var formId = context.id || defaultFormId;
     var collection = Utility.lookup(context.collection);
+    var schema = context.schema;
+    // ss will be the schema for the `schema` attribute if present,
+    // else the schema for the collection
     var ss = Utility.getSimpleSchemaFromContext(context, formId);
     var currentDoc = context.doc || null;
     var docId = currentDoc ? currentDoc._id : null;
@@ -250,6 +253,10 @@ Template.autoForm.events({
       if(!collection) {
          throw new Error("AutoForm: You must specify a collection when form type is insert.");
       }
+      // If there is an override schema supplied, validate against that first
+      if (schema && !isValid(insertDocForValidation, false, 'pre-submit validation')) {
+        return haltSubmission();
+      }
       collection.insert(insertDoc, {validationContext: formId}, makeCallback('insert', afterInsert));
     } else if (isUpdate) {
       var updateCallback = makeCallback('update', afterUpdate);
@@ -259,6 +266,26 @@ Template.autoForm.events({
       } else {
         if(!collection) {
           throw new Error("AutoForm: You must specify a collection when form type is update.");
+        }
+        // If there is an override schema supplied, validate against that first
+        if (schema) {
+          // Get a version of the doc that has auto values to validate here. We
+          // don't want to actually send any auto values to the server because
+          // we ultimately want them generated on the server
+          var updateDocForValidation = ss.clean(_.clone(updateDoc), {
+            filter: false,
+            autoConvert: false,
+            extendAutoValueContext: {
+              userId: (Meteor.userId && Meteor.userId()) || null,
+              isInsert: false,
+              isUpdate: true,
+              isUpsert: false,
+              isFromTrustedCode: false
+            }
+          });
+          if (!isValid(updateDocForValidation, true, 'pre-submit validation')) {
+            return haltSubmission();
+          }
         }
         collection.update(docId, updateDoc, {validationContext: formId}, updateCallback);
       }
@@ -284,7 +311,7 @@ Template.autoForm.events({
       if (!isValid(methodDocForValidation, false, method)) {
         return haltSubmission();
       }
-      Meteor.call(method, methodDoc, form.updateDoc, makeCallback(method, afterMethod));
+      Meteor.call(method, methodDoc, form.updateDoc, docId, makeCallback(method, afterMethod));
     }
   },
   'keyup [data-schema-key]': function autoFormKeyUpHandler(event, template) {
@@ -343,29 +370,34 @@ Template.autoForm.events({
     }
   },
   'click .autoform-remove-item': function autoFormClickRemoveItem(event, template) {
-    var self = this;
+    var self = this; // This type of button must be used within an afEachArrayItem block, so we know the context
 
     event.preventDefault();
 
     var name = self.arrayFieldName;
+    var minCount = self.minCount; // optional, overrides schema
+    var maxCount = self.maxCount; // optional, overrides schema
     var index = self.index;
     var data = template.data;
     var formId = data && data.id || defaultFormId;
-    data = formData[formId];
+    var ss = formData[formId].ss;
 
     // remove the item we clicked
-    arrayTracker.removeFromFieldAtIndex(formId, name, index, data.ss, self.minCount, self.maxCount)
+    arrayTracker.removeFromFieldAtIndex(formId, name, index, ss, minCount, maxCount);
   },
   'click .autoform-add-item': function autoFormClickAddItem(event, template) {
-    var self = this;
-
     event.preventDefault();
 
-    var name = $(event.currentTarget).attr("data-autoform-field") || self.name;
+    // We pull from data attributes because the button could be manually
+    // added anywhere, so we don't know the data context.
+    var btn = $(event.currentTarget);
+    var name = btn.attr("data-autoform-field");
+    var minCount = btn.attr("data-autoform-minCount"); // optional, overrides schema
+    var maxCount = btn.attr("data-autoform-maxCount"); // optional, overrides schema
     var data = template.data;
     var formId = data && data.id || defaultFormId;
-    data = formData[formId];
+    var ss = formData[formId].ss;
 
-    arrayTracker.addOneToField(formId, name, data.ss, self.overrideMinCount, self.overrideMaxCount);
+    arrayTracker.addOneToField(formId, name, ss, minCount, maxCount);
   }
 });
