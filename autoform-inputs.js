@@ -1,5 +1,3 @@
-AutoForm = AutoForm || {};
-
 // Default Handlers
 defaultInputValueHandlers = {
 	'select.autoform-boolean': function () {
@@ -40,6 +38,15 @@ defaultInputValueHandlers = {
 	'input[type=radio]': function () {
 		if (this.is(":checked")) {
 			return this.val();
+		}
+	},
+	'input.autoform-boolean[type=hidden]': function () {
+		// type overridden to hidden, but schema expects boolean
+		var val = this.val();
+		if (val === "true") {
+			return true;
+		} else if (val === "false") {
+			return false;
 		}
 	},
 	'[type=select]': function () {
@@ -85,11 +92,4 @@ defaultInputValueHandlers = {
 		// fallback
 		return this.val();
 	}
-};
-
-// Custom Handlers
-customInputValueHandlers = {};
-
-AutoForm.inputValueHandlers = function afInputValueHandlers(handlers) {
-  _.extend(customInputValueHandlers, handlers);
 };

@@ -39,6 +39,8 @@ have to add to your app yourself.
 - [Objects and Arrays](#objects-and-arrays)
   - [afObjectField](#afobjectfield)
   - [afArrayField](#afarrayfield)
+  - [afEachArrayItem](#afeacharrayitem)
+  - [afArrayFieldIsFirstVisible and afArrayFieldIsLastVisible](#afarrayfieldisfirstvisible-and-afarrayfieldislastvisible)
 - [Public API](#public-api)
 - [Non-Collection Forms](#non-collection-forms)
   - [An Example Contact Form](#an-example-contact-form)
@@ -339,18 +341,19 @@ Renders an appropriate input for the field. This could be one of several differe
 input types, such a `input`, `textarea`, etc. Here's an overview of the logic
 that is used to determine which type of input to use:
 
+* If you include your own `type` attribute, that input type is used.
 * If type is `String`, `<input type="text">`.
-* If you include the `rows` attribute for a `String` type property or set a `max` value of greater than or equal to 150, a `<textarea>` is used instead of an `<input type="text">`.
+* If you include the `rows` attribute for a `String` type property, a `<textarea>` is used instead of an `<input type="text">`.
 * If type is `Number`, `<input type="number">`. You may specify the step, min, and max attributes to further restrict entry. The min and max values defined in your schema are automatically transferred to the DOM element, too.
 * If type is `Date`, `<input type="date">`. If you want `datetime` or `datetime-local` instead, specify your own `type`
-attribute when calling the helper.
+attribute.
 * If type is `String` and regEx is `SimpleSchema.RegEx.Email`, `<input type="email">`.
 * If type is `String` and regEx is `SimpleSchema.RegEx.Url`, `<input type="url">`.
 * If type is `Boolean`, a checkbox is used by default. However, if you set the
-`radio` or `select` attributes when calling the helper, then a radio or select
+`radio` or `select` attributes, then a radio or select
 control will be used instead. Use the `trueLabel` and `falseLabel` attributes
 to set the label used in the radio or select controls.
-* If you supply the `options` attribute on the helper, a `<select>` control is used instead. If type is also an array, such as `[String]`, then
+* If you supply the `options` attribute, a `<select>` control is used instead. If your schema expects an array for the field, then
 it is a multiple-select control. If you prefer radios or checkboxes (for example, if it is a short list of options),
 then simply add the `noselect` attribute (set to anything).
 * If optional is `false` or not set in the schema, the `required` attribute is added to the DOM element.
@@ -444,10 +447,9 @@ custom template to use.
 
 ### afFieldLabel
 
-Renders a label for the field. By default this is a `<label>` element with
+Renders a label for the field. The exact output depends on which template you use, but generally it is a `<label>` element with
 the `label` defined in the schema, or the humanized property name if no label
-is defined. You can specify a `template` attribute to generate something
-different.
+is defined.
 
 The following attributes are recognized:
 
@@ -459,8 +461,7 @@ custom template to use.
 
 ### afFieldMessage
 
-Accepts and requires just one attribute, `name`, which is the name of the schema
-key.
+Accepts and requires just one attribute, `name`, which is the name of the schema key.
 
 Outputs the user-friendly invalid reason message for the specified property, or
 an empty string if the property is valid. This value updates reactively whenever
@@ -470,10 +471,9 @@ for information on customizing the messages.
 
 ### afFieldIsInvalid
 
-Accepts and requires just one attribute, `name`, which is the name of the schema
-key.
+Accepts and requires just one attribute, `name`, which is the name of the schema key.
 
-Returns true if the specified key is currently invalid. This value updates 
+Returns `true` if the specified key is currently invalid. This value updates 
 reactively whenever validation is performed.
 
 ### afQuickField
@@ -486,7 +486,7 @@ This component accepts the same attributes as `afFieldInput` and `afFieldLabel`.
 Attributes that are prefixed with `label-` are forwarded to `afFieldLabel` while
 any remaining attributes are forwarded to `afFieldInput`.
 
-When you use the `afQuickField` component for a field that is an `Object`, it is rendered using the `afObjectField` helper. When you use the `afQuickField` component for a field that is an `Array`, it is rendered using the `afArrayField` helper. Refer to the "Objects and Arrays" section for additional information.
+When you use the `afQuickField` component for a field that is an `Object`, it is rendered using the `afObjectField` component unless you override the type or specify options. When you use the `afQuickField` component for a field that is an `Array`, it is rendered using the `afArrayField` component unless you override the type or specify options. Refer to the "Objects and Arrays" section for additional information.
 
 #### afQuickField Examples
 
@@ -582,13 +582,13 @@ Fields with type `Object` or `Array` are treated specially.
 
 ### afObjectField
 
-When you use the `afQuickField` component for a field that is an `Object`, it is rendered using the `afObjectField` component. This happens by default when you use a `quickForm` for a schema that has a field of type `Object`.
+When you use the `afQuickField` component for a field that is an `Object`, it is rendered using the `afObjectField` component unless you override the type or specify options. This happens by default when you use a `quickForm` for a schema that has a field of type `Object`.
 
 The `afObjectField` component renders all of an object field's subfields together as one group. The group is labeled with the name of the object field. The actual visual representation of the group will vary based on which template you use. For the "bootstrap3" default template, the group appears in a panel with a heading.
 
 ### afArrayField
 
-When you use the `afQuickField` component for a field that is an `Array`, it is rendered using the `afArrayField` component. This happens by default when you use a `quickForm` for a schema that has a field of type `Array`.
+When you use the `afQuickField` component for a field that is an `Array`, it is rendered using the `afArrayField` component unless you override the type or specify options. This happens by default when you use a `quickForm` for a schema that has a field of type `Array`.
 
 The `afArrayField` component renders all of an array field's array items together as one group. The group is labeled with the name of the array field. The actual visual representation of the group will vary based on which template you use. For the "bootstrap3" default template, the group appears in a panel with a heading.
 
@@ -597,6 +597,14 @@ Additionally, buttons for adding and removing array items are automatically adde
 An `afArrayField` (or an `afQuickField` for an array) supports the additional attributes `minCount` and `maxCount`. Normally, by default, you cannot remove items below the schema-defined `minCount` and you cannot add items above the schema-defined `maxCount`. However, sometimes you don't want a minimum or maximum count defined in the schema, but you *do* want to limit the number of items on a certain form. To do this, use the `minCount` and `maxCount` attributes. Note, however, that you may *not* override the `minCount` to be less than the schema-defined `minCount`, and you may not override the `maxCount` to be more than the schema-defined `maxCount`.
 
 At the moment, the add and remove buttons disappear when you can't use them. This could be changed to make them disabled. You can do this yourself with a custom template, but if you have thoughts about how it should work out of the box, submit an issue to discuss.
+
+### afEachArrayItem
+
+This is a block helper that can be used to render specific content for each item in an array. It tracks the addition and removal of array item fields (or groups of fields) reactively for you. This allows you to customize the repeated array fields, remove buttons, etc. It's generally most useful within a custom `afArrayField` template. See the built-in `afArrayField` templates for example usage.
+
+### afArrayFieldIsFirstVisible and afArrayFieldIsLastVisible
+
+These helpers must be used within an `afEachArrayItem` block and will return `true` or `false` depending on whether the current item/field in the array is the first or last visible item, respectively.
 
 ## Public API
 
@@ -664,7 +672,7 @@ Note that we've created an object `Schema` in which to store all of our app's sc
     <legend>Contact Us</legend>
     {{> afQuickField name="name"}}
     {{> afQuickField name="email"}}
-    {{> afQuickField name="message" rows="10"}}
+    {{> afQuickField name="message" rows=10}}
     <div>
       <button type="submit" class="btn btn-primary">Submit</button>
       <button type="reset" class="btn btn-default">Reset</button>
@@ -750,8 +758,12 @@ simply add the `autocomplete="off"` attribute to your input fields.
 ## Manual Validation
 
 In addition to telling your form to validate on certain events, sometimes you
-need to manually validate a particular field. To do this, call `AutoForm.validateField(formId, fieldName, skipEmpty)`. It returns `true` or `false` depending on the validity
+need to manually validate.
+
+* To validate a particular field, call `AutoForm.validateField(formId, fieldName, skipEmpty)`. It returns `true` or `false` depending on the validity
 of the field's current value, and it also causes reactive display of any errors for that field in the UI.
+* To validate a form, call `AutoForm.validateForm(formId)`. It returns `true` or `false` depending on the validity
+of the current values in the entire form, and it also causes reactive display of any errors for that form in the UI.
 
 ## Resetting Validation
 
@@ -892,9 +904,8 @@ you can return `false` to cancel the removal.
 argument of the insert, update, or remove methods on a Meteor.Collection or the
 Meteor.call method. Notice, though, that they are passed one additional final
 argument, which is the template object. One use for the template object
-might be so that you can call `find()` or `findAll()` to clean up certain form fields if the result was successful
-or show additional error-related elements if not. This should be rarely needed unless
-you have complex custom controls in your form.
+might be so that you can clean up certain form fields if the result was successful
+or show additional error-related elements if not. This should be rarely needed unless you have complex custom controls in your form.
 * Refer to the next sections for details about the `onSubmit`, `formToDoc`,
 and `docToForm` hooks.
 
@@ -933,7 +944,7 @@ if necessary
 * The template, in `template`
 
 If you return false, no further submission will happen, and it is equivalent
-to calling `event.preventDefault()` and `event.stopPropagation()`.
+to calling `this.event.preventDefault()` and `this.event.stopPropagation()`.
 This allows you to use an `onSubmit` hook in combination with other
 submission methods to add pre-submit logic.
 

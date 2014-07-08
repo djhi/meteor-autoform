@@ -1,109 +1,14 @@
 defaultFormId = "_afGenericID";
 formPreserve = new FormPreserve("autoforms");
 formData = {}; //for looking up autoform data by form ID
-var templatesById = {}; //keep a reference of autoForm templates by form `id` for AutoForm.getFormValues
-var arrayFields = {}; //track # of array fields per form
-var formValues = {}; //for reactive show/hide based on current value of a field
+templatesById = {}; //keep a reference of autoForm templates by form `id` for AutoForm.getFormValues
+formValues = {}; //for reactive show/hide based on current value of a field
 var fd = new FormData();
 arrayTracker = new ArrayTracker();
-
-AutoForm = AutoForm || {}; //exported
-
-/**
- * @method AutoForm.addHooks
- * @public
- * @param {String[]|String|null} formIds Form `id` or array of form IDs to which these hooks apply. Specify `null` to add hooks that will run for every form.
- * @param {Object} hooks Hooks to add, where supported names are "before", "after", "formToDoc", "docToForm", "onSubmit", "onSuccess", and "onError".
- * @returns {undefined}
- *
- * Defines hooks to be used by one or more forms. Extends hooks lists if called multiple times for the same
- * form.
- */
-AutoForm.addHooks = function autoFormAddHooks(formIds, hooks, replace) {
-  if (typeof formIds === "string") {
-    formIds = [formIds];
-  }
-
-  // If formIds is null, add global hooks
-  if (!formIds) {
-    Hooks.addHooksToList(Hooks.global, hooks, replace);
-  } else {
-    _.each(formIds, function (formId) {
-
-      // Init the hooks object if not done yet
-      Hooks.form[formId] = Hooks.form[formId] || {
-        before: {},
-        after: {},
-        formToDoc: [],
-        docToForm: [],
-        onSubmit: [],
-        onSuccess: [],
-        onError: [],
-        beginSubmit: [],
-        endSubmit: []
-      };
-
-      Hooks.addHooksToList(Hooks.form[formId], hooks, replace);
-    });
-  }
-};
-
-/**
- * @method AutoForm.hooks
- * @public
- * @param {Object} hooks
- * @returns {undefined}
- *
- * Defines hooks by form id. Extends hooks lists if called multiple times for the same
- * form.
- */
-AutoForm.hooks = function autoFormHooks(hooks, replace) {
-  _.each(hooks, function(hooksObj, formId) {
-    AutoForm.addHooks(formId, hooksObj, replace);
-  });
-};
-
-/**
- * @method AutoForm.resetForm
- * @public
- * @param {String} formId
- * @returns {undefined}
- *
- * Resets validation for an autoform.
- */
-AutoForm.resetForm = function autoFormResetForm(formId) {
-  if (typeof formId !== "string") {
-    return;
-  }
-
-  formPreserve.unregisterForm(formId);
-
-  // Reset array counts
-  arrayTracker.resetForm(formId);
-
-  if (formData[formId]) {
-    formData[formId].ss && formData[formId].ss.namedContext(formId).resetValidation();
-    // If simpleSchema is undefined, we haven't yet rendered the form, and therefore
-    // there is no need to reset validation for it. No error need be thrown.
-  }
-};
-
-var deps = {};
-
-var defaultTemplate = "bootstrap3";
-deps.defaultTemplate = new Deps.Dependency;
-AutoForm.setDefaultTemplate = function autoFormSetDefaultTemplate(template) {
-  defaultTemplate = template;
-  deps.defaultTemplate.changed();
-};
-
-AutoForm.getDefaultTemplate = function autoFormGetDefaultTemplate() {
-  deps.defaultTemplate.depend();
-  return defaultTemplate;
-};
-
+customInputValueHandlers = {};
+defaultTemplate = "bootstrap3";
 // All use global template by default
-var defaultTypeTemplates = {
+defaultTypeTemplates = {
   quickForm: null,
   afFieldLabel: null,
   afFieldSelect: null,
@@ -120,133 +25,31 @@ var defaultTypeTemplates = {
   afObjectField: null,
   afArrayField: null
 };
-deps.defaultTypeTemplates = {
-  quickForm: new Deps.Dependency,
-  afFieldLabel: new Deps.Dependency,
-  afFieldSelect: new Deps.Dependency,
-  afCheckboxGroup: new Deps.Dependency,
-  afRadioGroup: new Deps.Dependency,
-  afSelect: new Deps.Dependency,
-  afTextarea: new Deps.Dependency,
-  afContenteditable: new Deps.Dependency,
-  afCheckbox: new Deps.Dependency,
-  afRadio: new Deps.Dependency,
-  afInput: new Deps.Dependency,
-  afDeleteButton: new Deps.Dependency,
-  afQuickField: new Deps.Dependency,
-  afObjectField: new Deps.Dependency,
-  afArrayField: new Deps.Dependency
-};
 
-/**
- * @method AutoForm.setDefaultTemplateForType
- * @public
- * @param {String} type
- * @param {String} template
- */
-AutoForm.setDefaultTemplateForType = function autoFormSetDefaultTemplateForType(type, template) {
-  if (!deps.defaultTypeTemplates[type]) {
-    throw new Error("invalid template type: " + type);
+deps = {
+  defaultTemplate: new Deps.Dependency,
+  defaultTypeTemplates: {
+    quickForm: new Deps.Dependency,
+    afFieldLabel: new Deps.Dependency,
+    afFieldSelect: new Deps.Dependency,
+    afCheckboxGroup: new Deps.Dependency,
+    afRadioGroup: new Deps.Dependency,
+    afSelect: new Deps.Dependency,
+    afTextarea: new Deps.Dependency,
+    afContenteditable: new Deps.Dependency,
+    afCheckbox: new Deps.Dependency,
+    afRadio: new Deps.Dependency,
+    afInput: new Deps.Dependency,
+    afDeleteButton: new Deps.Dependency,
+    afQuickField: new Deps.Dependency,
+    afObjectField: new Deps.Dependency,
+    afArrayField: new Deps.Dependency
   }
-  if (template !== null && !Template[type + "_" + template]) {
-    throw new Error("setDefaultTemplateForType can't set default template to \"" + template + "\" for type \"" + type + "\" because there is no defined template with the name \"" + type + "_" + template + "\"");
-  }
-  defaultTypeTemplates[type] = template;
-  deps.defaultTypeTemplates[type].changed();
-};
-
-/**
- * @method AutoForm.getDefaultTemplateForType
- * @public
- * @param {String} type
- * @return {String} Template name
- *
- * Reactive.
- */
-AutoForm.getDefaultTemplateForType = function autoFormGetDefaultTemplateForType(type) {
-  if (!deps.defaultTypeTemplates[type]) {
-    throw new Error("invalid template type: " + type);
-  }
-  deps.defaultTypeTemplates[type].depend();
-  return defaultTypeTemplates[type];
-};
-
-/**
- * @method AutoForm.getFormValues
- * @public
- * @param {String} formId The `id` attribute of the `autoForm` you want current values for.
- * @return {Object}
- *
- * Returns an object representing the current values of all schema-based fields in the form.
- * The returned object contains two properties, "insertDoc" and "updateDoc", which represent
- * the field values as a normal object and as a MongoDB modifier, respectively.
- */
-AutoForm.getFormValues = function autoFormGetFormValues(formId) {
-  var template = templatesById[formId];
-  if (!template || template._notInDOM) {
-    throw new Error("getFormValues: There is currently no autoForm template rendered for the form with id " + formId);
-  }
-  // Get a reference to the SimpleSchema instance that should be used for
-  // determining what types we want back for each field.
-  var context = template.data;
-  var ss = Utility.getSimpleSchemaFromContext(context, formId);
-  return getFormValues(template, formId, ss);
-};
-
-/**
- * @method AutoForm.getFieldValue
- * @public
- * @param {String} formId The `id` attribute of the `autoForm` you want current values for.
- * @param {String} fieldName The name of the field for which you want the current value.
- * @return {Any}
- *
- * Returns the value of the field (the value that would be used if the form were submitted right now).
- * This is a reactive method that will rerun whenever the current value of the requested field changes.
- */
-AutoForm.getFieldValue = function autoFormGetFieldValue(formId, fieldName) {
-  formValues[formId] = formValues[formId] || {};
-  formValues[formId][fieldName] = formValues[formId][fieldName] || {_deps: new Deps.Dependency};
-  formValues[formId][fieldName]._deps.depend();
-  return formValues[formId][fieldName]._val;
-};
-
-/**
- * @method AutoForm.validateField
- * @public
- * @param {String} formId The `id` attribute of the `autoForm` you want to validate.
- * @param {String} fieldName The name of the field within the `autoForm` you want to validate.
- * @param {Boolean} [skipEmpty=false] Set to `true` to skip validation if the field has no value. Useful for preventing `required` errors in form fields that the user has not yet filled out.
- * @return {Boolean} Is it valid?
- *
- * In addition to returning a boolean that indicates whether the field is currently valid,
- * this method causes the reactive validation messages to appear.
- */
-AutoForm.validateField = function autoFormValidateField(formId, fieldName, skipEmpty) {
-  var template = templatesById[formId];
-  if (!template || template._notInDOM) {
-    throw new Error("validateField: There is currently no autoForm template rendered for the form with id " + formId);
-  }
-
-  return _validateField(fieldName, template, skipEmpty, false);
 };
 
 /*
  * Shared
  */
-
-UI.registerHelper('_af_findAutoForm', function afFindAutoForm(name) {
-  var afContext, i = 1;
-
-  do {
-    afContext = arguments[i];
-    i++;
-  } while (afContext && !afContext._af);
-
-  if (!afContext)
-    throw new Error(name + " must be used within an autoForm block");
-
-  return afContext;
-});
 
 Template.afFieldInput.getTemplate =
 Template.afFieldLabel.getTemplate =
@@ -339,10 +142,11 @@ Template.autoForm.innerContext = function autoFormTplInnerContext(outerContext) 
     formId: formId,
     collection: collection,
     ss: ss,
-    doc: context.doc,
+    doc: context.doc || null,
     mDoc: mDoc,
-    validationType: (typeof context.validation === "undefined" ? "submitThenKeyup" : context.validation),
+    validationType: (context.validation == null ? "submitThenKeyup" : context.validation),
     submitType: context.type,
+    submitMethod: context.meteormethod,
     resetOnSuccess: context.resetOnSuccess
   }};
 
@@ -580,15 +384,16 @@ Template.afQuickField.innerContext = function afQuickFieldInnerContext(options) 
 
 Template.afQuickField.isGroup = function afQuickFieldIsGroup(options) {
   var c = Utility.normalizeContext(options.hash, "afQuickField");
-  // Render a group of fields if we expect an Object
-  return (c.defs.type === Object);
+  // Render an array of fields if we expect an Object and we don't have options
+  // and we have not overridden the type
+  return (c.defs.type === Object && !c.atts.options && !c.atts.type);
 };
 
 Template.afQuickField.isFieldArray = function afQuickFieldIsFieldArray(options) {
   var c = Utility.normalizeContext(options.hash, "afQuickField");
-
   // Render an array of fields if we expect an Array and we don't have options
-  return (c.defs.type === Array && !c.atts.options);
+  // and we have not overridden the type
+  return (c.defs.type === Array && !c.atts.options && !c.atts.type);
 };
 
 /*
@@ -995,6 +800,12 @@ function getInputData(defs, hash, value, inputType, label, expectsArray, submitT
           inputAtts.min = Utility.dateToNormalizedLocalDateAndTimeString(min, inputAtts["data-offset"]);
         }
         break;
+      case "hidden":
+        if (schemaType === Boolean) {
+          // add autoform-boolean class, which we use when building object
+          // from form values later
+          inputAtts["class"] = (inputAtts["class"] || "") + " autoform-boolean";
+        }
     }
 
     if (typeof inputAtts.maxlength === "undefined"
@@ -1016,7 +827,6 @@ function getInputData(defs, hash, value, inputType, label, expectsArray, submitT
 
 function getInputType(atts, defs, expectsArray) {
   var schemaType = defs.type;
-  var max = (typeof defs.max === "function") ? defs.max() : defs.max;
 
   var type = "text";
   if (atts.type) {
@@ -1035,7 +845,7 @@ function getInputType(atts, defs, expectsArray) {
     type = "email";
   } else if (schemaType === String && defs.regEx === SimpleSchema.RegEx.Url) {
     type = "url";
-  } else if (schemaType === String && (atts.rows || max >= 150)) {
+  } else if (schemaType === String && atts.rows) {
     type = "textarea";
   } else if (schemaType === Number) {
     type = "number";
@@ -1071,78 +881,6 @@ function getInputTemplateType(type) {
   
   return typeMap[type] || defaultTemplateType;
 }
-
-function _validateField(key, template, skipEmpty, onlyIfAlreadyInvalid) {
-  if (!template || template._notInDOM) {
-    return; //skip validation
-  }
-
-  var context = template.data;
-  var formId = context.id || defaultFormId;
-  var ss = Utility.getSimpleSchemaFromContext(context, formId);
-
-  if (onlyIfAlreadyInvalid && ss.namedContext(formId).isValid()) {
-    return; //skip validation
-  }
-
-  // Create a document based on all the values of all the inputs on the form
-  var form = getFormValues(template, formId, ss);
-
-  // Clean and validate doc
-  if (context.type === "update") {
-    var docToValidate = form.updateDoc;
-    var isModifier = true;
-  } else {
-    var docToValidate = form.insertDoc;
-    var isModifier = false;
-  }
-
-  // Skip validation if skipEmpty is true and the field we're validating
-  // has no value.
-  if (skipEmpty && !Utility.objAffectsKey(docToValidate, key))
-    return; //skip validation
-
-  var userId = (Meteor.userId && Meteor.userId()) || null;
-
-  // getFormValues did some cleaning but didn't add auto values; add them now
-  ss.clean(docToValidate, {
-    isModifier: isModifier,
-    filter: false,
-    autoConvert: false,
-    extendAutoValueContext: {
-      userId: userId,
-      isInsert: !isModifier,
-      isUpdate: isModifier,
-      isUpsert: false,
-      isFromTrustedCode: false
-    }
-  });
-  return ss.namedContext(formId).validateOne(docToValidate, key, {
-    modifier: isModifier,
-    extendedCustomContext: {
-      userId: userId,
-      isInsert: !isModifier,
-      isUpdate: isModifier,
-      isUpsert: false,
-      isFromTrustedCode: false
-    }
-  });
-}
-
-//throttling function that calls out to _validateField
-var vok = {}, tm = {};
-validateField = function validateField(key, template, skipEmpty, onlyIfAlreadyInvalid) {
-  if (vok[key] === false) {
-    Meteor.clearTimeout(tm[key]);
-    tm[key] = Meteor.setTimeout(function() {
-      vok[key] = true;
-      _validateField(key, template, skipEmpty, onlyIfAlreadyInvalid);
-    }, 300);
-    return;
-  }
-  vok[key] = false;
-  _validateField(key, template, skipEmpty, onlyIfAlreadyInvalid);
-};
 
 updateTrackedFieldValue = function updateTrackedFieldValue(formId, key, val) {
   formValues[formId] = formValues[formId] || {};

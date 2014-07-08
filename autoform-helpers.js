@@ -59,6 +59,22 @@ UI.registerHelper('afFieldValueIs', function autoFormFieldValueIs(options) {
 });
 
 /*
+ * afArrayFieldIsFirstVisible
+ */
+UI.registerHelper('afArrayFieldIsFirstVisible', function autoFormArrayFieldIsFirstVisible() {
+  var context = this;
+  return arrayTracker.isFirstFieldlVisible(context.formId, context.arrayFieldName, context.index);
+});
+
+/*
+ * afArrayFieldIsLastVisible
+ */
+UI.registerHelper('afArrayFieldIsLastVisible', function autoFormArrayFieldIsLastVisible() {
+  var context = this;
+  return arrayTracker.isLastFieldlVisible(context.formId, context.arrayFieldName, context.index);
+});
+
+/*
  * afFieldValueContains
  */
 UI.registerHelper('afFieldValueContains', function autoFormFieldValueContains(options) {
@@ -110,6 +126,10 @@ UI.registerHelper("afFieldNames", function autoFormFieldNames(options) {
   if (omitFields) {
     omitFields = Utility.stringToArray(omitFields, 'AutoForm: omitFields attribute must be an array or a string containing a comma-delimited list of fields');
     fieldList = _.difference(fieldList, omitFields);
+    // If omitFields contains generic field names (with $) we omit those too
+    fieldList = _.reject(fieldList, function (f) {
+      return _.contains(omitFields, SimpleSchema._makeGeneric(f));
+    });
   }
 
   // Filter out fields we never want
@@ -117,11 +137,11 @@ UI.registerHelper("afFieldNames", function autoFormFieldNames(options) {
     var fieldDefs = ss.schema(field);
 
     // Don't include fields with denyInsert=true when it's an insert form
-    if (fieldDefs.denyInsert && afContext.submitType === "insert")
+    if (fieldDefs.denyInsert && options.submitType === "insert")
       return false;
 
     // Don't include fields with denyUpdate=true when it's an update form
-    if (fieldDefs.denyUpdate && afContext.submitType === "update")
+    if (fieldDefs.denyUpdate && options.submitType === "update")
       return false;
 
     return true;
@@ -136,6 +156,20 @@ UI.registerHelper("afFieldNames", function autoFormFieldNames(options) {
 /*
  * PRIVATE
  */
+
+UI.registerHelper('_af_findAutoForm', function afFindAutoForm(name) {
+  var afContext, i = 1;
+
+  do {
+    afContext = arguments[i];
+    i++;
+  } while (afContext && !afContext._af);
+
+  if (!afContext)
+    throw new Error(name + " must be used within an autoForm block");
+
+  return afContext;
+});
 
 function parseOptions(options, self, helperName) {
   var hash = (options || {}).hash || {};
