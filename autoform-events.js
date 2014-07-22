@@ -355,6 +355,8 @@ Template.autoForm.events({
 
     var formId = this.id;
     var data = formData[formId];
+    var validationType = 'submitThenKeyup';
+
     if (data && data.ss) {
       var ss = data.ss;
       formPreserve.registerForm(formId, function autoFormRegFormCallback() {
@@ -364,7 +366,11 @@ Template.autoForm.events({
       // Get field's value for reactive show/hide of other fields by value
       updateTrackedFieldValue(formId, key, getFieldValue(template, key));
     }
-    var validationType = data.validationType || 'submitThenKeyup';
+
+    if(data){
+      validationType = data.validationType || 'submitThenKeyup';
+    }
+    
     var onlyIfAlreadyInvalid = (validationType === 'submitThenKeyup' || validationType === 'submitThenBlur');
     if (validationType === 'keyup' || validationType === 'blur' || validationType === 'submitThenKeyup' || validationType === 'submitThenBlur') {
       validateField(key, template, false, onlyIfAlreadyInvalid);
