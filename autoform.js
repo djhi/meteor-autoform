@@ -3,6 +3,7 @@ formPreserve = new FormPreserve("autoforms");
 formData = {}; //for looking up autoform data by form ID
 templatesById = {}; //keep a reference of autoForm templates by form `id` for AutoForm.getFormValues
 formValues = {}; //for reactive show/hide based on current value of a field
+formDeps = {}; //for invalidating the form inner context and causing rerender
 var fd = new FormData();
 arrayTracker = new ArrayTracker();
 customInputValueHandlers = {};
@@ -142,6 +143,7 @@ Template.autoForm.innerContext = function autoFormTplInnerContext(outerContext) 
     formId: formId,
     collection: collection,
     ss: ss,
+    ssIsOverride: !!collection && !!context.schema,
     doc: context.doc || null,
     mDoc: mDoc,
     validationType: (context.validation == null ? "submitThenKeyup" : context.validation),
@@ -240,6 +242,10 @@ Template.afFieldInput.innerContext = function afFieldInputInnerContext(options) 
   var c = Utility.normalizeContext(options.hash, "afFieldInput and afFieldSelect");
   var contentBlock = options.hash.contentBlock; // applies only to afFieldSelect
 
+  // Set up deps, allowing us to re-render the form
+  formDeps[c.af.formId] = formDeps[c.af.formId] || new Deps.Dependency;
+  formDeps[c.af.formId].depend();
+
   var ss = c.af.ss;
   var defs = c.defs;
 
@@ -266,7 +272,7 @@ Template.afFieldInput.innerContext = function afFieldInputInnerContext(options) 
   
   // Get input data context
   var iData = getInputData(defs, c.atts, value, inputType, ss.label(c.atts.name), expectsArray, c.af.submitType, c.af);
-  
+
   // Return input data context
   return _.extend({_af: c.af, contentBlock: contentBlock, type: inputType}, iData);
 };
@@ -495,7 +501,7 @@ getFormValues = function getFormValues(template, formId, ss) {
 
 /*
  * Gets the value that should be shown/selected in the input. Returns
- * a string or an array of strings. The value used,
+ * a string, a boolean, or an array of strings. The value used,
  * in order of preference, is one of:
  * * The `value` attribute provided
  * * The value that is set in the `doc` provided on the containing autoForm
@@ -563,7 +569,12 @@ function getInputValue(name, atts, expectsArray, inputType, value, mDoc, default
     value = stringValue(value);
   }
 
-  // We return either a string or an array of strings
+  // Switch to a boolean value for boolean fields
+  if (inputType === "boolean-radios" || inputType === "boolean-select" || inputType === "boolean-checkbox") {
+    value = (value === "true") ? true : false;
+  }
+
+  // We return either a string, a boolean, or an array of strings
   return value;
 }
 
@@ -721,7 +732,6 @@ function getInputData(defs, hash, value, inputType, label, expectsArray, submitT
     }
     data.value = value;
   } else if (inputType === "boolean-radios" || inputType === "boolean-select" || inputType === "boolean-checkbox") {
-    value = (value === "true") ? true : false;
 
     // add autoform-boolean class, which we use when building object
     // from form values later
@@ -887,4 +897,18 @@ updateTrackedFieldValue = function updateTrackedFieldValue(formId, key, val) {
   formValues[formId][key] = formValues[formId][key] || {_deps: new Deps.Dependency};
   formValues[formId][key]._val = val;
   formValues[formId][key]._deps.changed();
+};
+
+updateAllTrackedFieldValues = function updateAllTrackedFieldValues(formId) {
+  var template = templatesById[formId];
+  if (!template)
+    return;
+  _.each(formValues[formId], function (o, key) {
+    updateTrackedFieldValue(formId, key, getFieldValue(template, key));
+  });
+};
+
+invalidateFormContext = function invalidateFormContext(formId) {
+  formDeps[formId] = formDeps[formId] || new Deps.Dependency;
+  formDeps[formId].changed();
 };

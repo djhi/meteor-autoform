@@ -42,11 +42,13 @@ Template.autoForm.events({
     var isInsert = (data.submitType === "insert");
     var isUpdate = (data.submitType === "update");
     var isRemove = (data.submitType === "remove");
+    var isMethod = (data.submitType === "method");
     var method = data.submitMethod;
-    var isNormalSubmit = (!isInsert && !isUpdate && !isRemove && !method);
+    var isNormalSubmit = (!isInsert && !isUpdate && !isRemove && !isMethod);
     // ss will be the schema for the `schema` attribute if present,
     // else the schema for the collection
     var ss = data.ss;
+    var ssIsOverride = data.ssIsOverride;
     var collection = data.collection;
     var currentDoc = data.doc;
     var docId = currentDoc ? currentDoc._id : null;
@@ -62,15 +64,14 @@ Template.autoForm.events({
         throw new Error("AutoForm: You must specify a collection when form type is remove.");
     }
 
-    // Gather hooks
-    var onSuccess = Hooks.getHooks(formId, 'onSuccess');
-    var onError = Hooks.getHooks(formId, 'onError');
-    var onSubmit = Hooks.getHooks(formId, 'onSubmit');
-
     // Prevent browser form submission if we're planning to do our own thing
     if (!isNormalSubmit) {
       event.preventDefault();
     }
+
+    // Gather hooks
+    var onSuccess = Hooks.getHooks(formId, 'onSuccess');
+    var onError = Hooks.getHooks(formId, 'onError');
 
     // Prep haltSubmission function
     function haltSubmission() {
@@ -80,13 +81,12 @@ Template.autoForm.events({
       endSubmit(formId, template);
     }
 
-    // Prep reset form function
-    function autoFormDoResetForm() {
-      if (!template._notInDOM) {
-        template.find("form").reset();
-        var focusInput = template.find("[autofocus]");
-        focusInput && focusInput.focus();
-      }
+    function failedValidation() {
+      selectFirstInvalidField(formId, ss, template);
+      _.each(onError, function onErrorEach(hook) {
+        hook('pre-submit validation', new Error('form failed validation'), template);
+      });
+      haltSubmission();
     }
 
     // Prep callback creator function
@@ -94,6 +94,7 @@ Template.autoForm.events({
       var afterHooks = Hooks.getHooks(formId, 'after', name);
       return function autoFormActionCallback(error, result) {
         if (error) {
+          preventQueuedValidation();
           selectFirstInvalidField(formId, ss, template);
           _.each(onError, function onErrorEach(hook) {
             hook(name, error, template);
@@ -102,7 +103,7 @@ Template.autoForm.events({
           // By default, we reset form after successful submit, but
           // you can opt out.
           if (resetOnSuccess !== false) {
-            autoFormDoResetForm();
+            AutoForm.resetForm(formId, template);
           }
           _.each(onSuccess, function onSuccessEach(hook) {
             hook(name, result, template);
@@ -116,12 +117,104 @@ Template.autoForm.events({
       };
     }
 
-    // Prep handleValidationError function
-    function handleValidationError(type) {
-      selectFirstInvalidField(formId, ss, template);
-      _.each(onError, function onErrorEach(hook) {
-        hook('pre-submit validation', new Error(type + ' failed validation'), template);
+    // Prep function that calls before hooks.
+    // We pass the template instance in case the hook
+    // needs the data context.
+    function doBefore(docId, doc, hooks, name, next) {
+      // We call the hooks recursively, in order added,
+      // passing the result of the first hook to the
+      // second hook, etc.
+      function runHook(i, doc) {
+        hook = hooks[i];
+
+        if (!hook) {
+          // We've run all hooks; continue submission
+          next(doc);
+          return;
+        }
+
+        // Set up before hook context
+        var cb = function (d) {
+          // If the hook returns false, we cancel
+          if (d === false) {
+            // Run endSubmit hooks (re-enabled submit button or form, etc.)
+            endSubmit(formId, template);
+          } else {
+            if (!_.isObject(d)) {
+              throw new Error(name + " must return an object");
+            }
+            runHook(i+1, d);
+          }
+        };
+        var ctx = {
+          result: _.once(cb)
+        };
+
+        var result;
+        if (docId) {
+          result = hook.call(ctx, docId, doc, template);
+        } else {
+          result = hook.call(ctx, doc, template);
+        }
+        // If the hook returns undefined, we wait for it
+        // to call this.result()
+        if (result !== void 0) {
+          ctx.result(result);
+        }
+      }
+      
+      runHook(0, doc);
+    }
+
+    // Prep function that calls onSubmit hooks.
+    // We pass the template instance in case the hook
+    // needs the data context, and event in case they
+    // need to prevent default, etc.
+    function doOnSubmit(hooks, insertDoc, updateDoc, currentDoc) {
+      // These are called differently from the before hooks because
+      // they run async, but they can run in parallel and we need the
+      // result of all of them immediately because they can return
+      // false to stop normal form submission.
+
+      var hookCount = hooks.length, doneCount = 0;
+
+      if (hookCount === 0) {
+        // Run endSubmit hooks (re-enabled submit button or form, etc.)
+        endSubmit(formId, template);
+        return;
+      }
+
+      // Set up before hook context
+      var ctx = {
+        event: event,
+        template: template,
+        resetForm: function () {
+          AutoForm.resetForm(formId, template);
+        },
+        done: function () {
+          doneCount++;
+          if (doneCount === hookCount) {
+            // Run endSubmit hooks (re-enabled submit button or form, etc.)
+            endSubmit(formId, template);
+          }
+        }
+      };
+
+      // Call all hooks at once.
+      // Pass both types of doc plus the doc attached to the form.
+      // If any return false, we stop normal submission, but we don't
+      // run endSubmit hooks until they all call this.done().
+      var shouldStop = false;
+      _.each(hooks, function eachOnSubmit(hook) {
+        var result = hook.call(ctx, insertDoc, updateDoc, currentDoc);
+        if (shouldStop === false && result === false) {
+          shouldStop = true;
+        }
       });
+      if (shouldStop) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
     }
 
     // If type is "remove", do that right away since we don't need to gather
@@ -143,34 +236,30 @@ Template.autoForm.events({
       return;
     }
 
-    // Validate, which also gets form values, runs before hooks, and gives us the potentially revised docs
-    var results = _validateForm(formId, template);
+    // Validate, which also gets form values.
+    // For inserts and updates, which have their
+    // own validation, we validate here only if
+    // there is a `schema` attribute on the form.
+    // Otherwise we let collection2 do the validation
+    // after before hooks have run.
+    var skipValidation;
+    if (ssIsOverride || isMethod || isNormalSubmit) {
+      skipValidation = false;
+      // For method forms when ssIsOverride, we will validate again, later, after before hooks
+      // but before calling the method, against the collection schema
+    } else {
+      skipValidation = true;
+    }
 
-    if (results.methodDocIsValid === false) {
-      handleValidationError('Method doc');
-      return haltSubmission();
-    } else if (results.updateDocIsValid === false) {
-      handleValidationError('Update modifier');
-      return haltSubmission();
-    } else if (results.insertDocIsValid === false) {
-      handleValidationError('Insert doc');
-      return haltSubmission();
-    } else if (results.submitDocIsValid === false) {
-      handleValidationError('Submit doc');
-      return haltSubmission();
+    var results = _validateForm(formId, template, skipValidation);
+
+    // If we failed pre-submit validation, we stop submission.
+    if (results.insertDocIsValid === false) {
+      return failedValidation();
     }
 
     var insertDoc = results.insertDoc;
     var updateDoc = results.updateDoc;
-    var methodDoc = results.methodDoc;
-    var submitDoc = results.submitDoc;
-    var submitUpdateDoc = results.submitUpdateDoc;
-
-    if (isUpdate && _.isEmpty(updateDoc)) { // make sure this check stays after the before hooks
-      // Nothing to update. Just treat it as a successful update.
-      var updateCallback = makeCallback('update');
-      updateCallback(null, 0);
-    }
 
     // Run beginSubmit hooks (disable submit button or form, etc.)
     // NOTE: This needs to stay after getFormValues in case a
@@ -179,45 +268,69 @@ Template.autoForm.events({
     // then we actually do want the values.
     beginSubmit(formId, template);
 
-    // Call onSubmit hooks. If any return false, we stop submission.
-    if (onSubmit.length > 0) {
-      var context = {
-        event: event,
-        template: template,
-        resetForm: autoFormDoResetForm
-      };
-      // Pass both types of doc to onSubmit
-      var shouldStop = _.any(onSubmit, function eachOnSubmit(hook) {
-        return (hook.call(context, submitDoc, submitUpdateDoc, currentDoc) === false);
-      });
-      if (shouldStop) {
-        return haltSubmission();
-      }
-    }
-
     // Now we will do the requested insert, update, remove, method, or normal
     // browser form submission. Even though we may have already validated above,
     // we do it again upon insert or update
     // because collection2 validation catches additional stuff like unique and
     // because our form schema need not be the same as our collection schema.
+
+    // INSERT FORM SUBMIT
     if (isInsert) {
-      var insertCallback = makeCallback('insert');
-      collection.insert(insertDoc, {validationContext: formId}, insertCallback);
-    } else if (isUpdate) {
-      var updateCallback = makeCallback('update');
-      collection.update(docId, updateDoc, {validationContext: formId}, updateCallback);
+      // Get "before.insert" hooks
+      var beforeInsertHooks = Hooks.getHooks(formId, 'before', 'insert');
+      // Run "before.insert" hooks
+      doBefore(null, insertDoc, beforeInsertHooks, 'before.insert hook', function (doc) {
+        // Make callback for insert
+        var insertCallback = makeCallback('insert');
+        // Perform insert
+        collection.insert(doc, {validationContext: formId}, insertCallback);
+      });
     }
 
-    // We won't do an else here so that a method could be called in
-    // addition to another action on the same submit
-    if (method) {
-      var methodCallback = makeCallback(method);
-      Meteor.call(method, methodDoc, updateDoc, docId, methodCallback);
+    // UPDATE FORM SUBMIT
+    else if (isUpdate) {
+      // Get "before.update" hooks
+      var beforeUpdateHooks = Hooks.getHooks(formId, 'before', 'update');
+      // Run "before.update" hooks
+      doBefore(docId, updateDoc, beforeUpdateHooks, 'before.update hook', function (modifier) {
+        // Make callback for update
+        var updateCallback = makeCallback('update');
+        if (_.isEmpty(modifier)) { // make sure this check stays after the before hooks
+          // Nothing to update. Just treat it as a successful update.
+          updateCallback(null, 0);
+        }
+        // Perform update
+        collection.update(docId, modifier, {validationContext: formId}, updateCallback);
+      });
     }
 
-    if (isNormalSubmit) {
-      // Run endSubmit hooks (re-enabled submit button or form, etc.)
-      endSubmit(formId, template);
+    // METHOD FORM SUBMIT
+    else if (isMethod) {
+      // Get "before.methodName" hooks
+      var beforeMethodHooks = Hooks.getHooks(formId, 'before', method);
+      // Run "before.methodName" hooks
+      doBefore(null, insertDoc, beforeMethodHooks, 'before.method hook', function (doc) {
+        // When both `schema` and `collection` are supplied, we do a
+        // second validation now, against the collection schema,
+        // before calling the method.
+        if (ssIsOverride && data.validationType !== 'none') {
+          var isValid = validateFormDoc(doc, false, formId, ss);
+          if (!isValid) {
+            return failedValidation();
+          }
+        }
+        // Make callback for Meteor.call
+        var methodCallback = makeCallback(method);
+        // Call the method
+        Meteor.call(method, doc, updateDoc, docId, methodCallback);
+      });
+    }
+
+    // NORMAL FORM SUBMIT
+    else if (isNormalSubmit) {
+      // Get onSubmit hooks
+      var onSubmitHooks = Hooks.getHooks(formId, 'onSubmit');
+      doOnSubmit(onSubmitHooks, insertDoc, updateDoc, currentDoc);
     }
   },
   'keyup [data-schema-key]': function autoFormKeyUpHandler(event, template) {
@@ -258,14 +371,44 @@ Template.autoForm.events({
     }
   },
   'reset form': function autoFormResetHandler(event, template) {
-    var context = this;
-    var formId = context.id || defaultFormId;
-    AutoForm.resetForm(formId);
-    if (context.doc) {
-      //reload form values from doc
-      event.preventDefault();
-      template['__component__'].render();
+    var formId = this.id || defaultFormId;
+
+    formPreserve.unregisterForm(formId);
+
+    // Reset array counts
+    arrayTracker.resetForm(formId);
+
+    var fd = formData[formId];
+
+    if (!fd)
+      return;
+
+    if (fd.ss) {
+      fd.ss.namedContext(formId).resetValidation();
+      // If simpleSchema is undefined, we haven't yet rendered the form, and therefore
+      // there is no need to reset validation for it. No error need be thrown.
     }
+
+    //XXX We should ideally be able to call invalidateFormContext
+    // in all cases and that's it, but we need to figure out how
+    // to make Blaze forget about any changes the user made to the form
+    if (this.doc) {
+      event.preventDefault();
+      invalidateFormContext(formId);
+      template.$("[autofocus]").focus();
+    } else {
+      // Update tracked field values
+      // This must be done after we allow this event handler to return
+      // because we have to let the browser reset all fields before we
+      // update their values for deps.
+      Meteor.setTimeout(function () {
+        updateAllTrackedFieldValues(formId);
+        if (template && !template._notInDOM) {
+          template.$("[autofocus]").focus();
+        }
+      }, 0);
+    }
+
   },
   'keydown .autoform-array-item input': function (event, template) {
     // When enter is pressed in an array item field, default behavior
