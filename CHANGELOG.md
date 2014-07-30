@@ -6,6 +6,25 @@ forms with automatic insert and update events, and automatic reactive validation
 
 ## Change Log
 
+### 0.16.1
+
+An insert form will now insert properly even if the `collection` does not have an attached schema.
+
+### 0.16.0
+
+* Fix error when you add `autoform` to your app but not `simple-schema`.
+* You can now use object dot notation when setting collection or schema for a form as a string, for example, `collection="App.Collections.Posts"` or `schema="Schemas.Post"`. (Thanks @czeslaaw)
+* You can now easily tell an update form to save (submit) whenever the value in one of its fields changes. Put `autosave=true` on the `autoForm` or `quickForm`.
+
+### 0.15.4
+
+* Fixes to submission validation logic for forms that have both `collection` and `schema`
+* More useful `Error` instance is passed to `onError` hooks
+
+### 0.15.3
+
+Fix to code that gathers form values so that custom object prototypes are not lost.
+
 ### 0.15.2
 
 When submitting, ensure that validation is always skipped when `validation="none"` for the form.
